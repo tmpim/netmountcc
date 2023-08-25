@@ -1,12 +1,11 @@
 import express from 'express';
 import expressWs from 'express-ws';
+import path from 'path';
 import { v4 } from 'uuid'
 import { methods } from "./fs"
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
-app.locals.title = "CC Remote Mount"
-app.locals.url = "localhost:4000"
 
 if (!(process.argv[2] && process.argv[3])) {
     throw new Error("Missing username and password parameters")
@@ -55,17 +54,20 @@ app.get('/', async (req, res) => {
   
     // Verify login and password are set and correct
     if (login && password && login === auth.login && password === auth.password) {
-        // Access granted...
         token = new Token();
         res.status(200).type('application/json').send(JSON.stringify({
             uuid: token.uuid
         }))
         return
     }
-    // Access denied...
-    res.set('WWW-Authenticate', 'Basic realm="ccmount"') // change this
-    res.status(401).send('Authentication required.') // custom message
+    res.set('WWW-Authenticate', 'Basic realm="ccmount"')
+    res.status(401).send('Authentication required.')
 });
+
+const luaPath = path.join(__dirname, "../public/mount.lua")
+app.get('/mount.lua', async (req, res) => {
+    res.status(200).type('text/plain').sendFile(luaPath)
+})
 
 app.ws('/:uuid', async (ws, req) => {
     if (token && token.matches(req.params.uuid)) {
@@ -81,9 +83,7 @@ app.ws('/:uuid', async (ws, req) => {
                 }
                 const method = methods.get(content.type)
                 if (method) {
-                    console.log("input: ", content)
                     const out = JSON.stringify(await method(content))
-                    console.log("output: ", out)
                     ws.send(out)
                 } else {
                     ws.send(JSON.stringify({

@@ -11,7 +11,6 @@ export interface AsyncFSFunction {
 }
 
 export class Attributes {
-    //{ size = number, isDir = boolean, isReadOnly = boolean, created = number, modified = number }
     readonly size: number;
     readonly isDir: boolean;
     readonly isReadOnly: boolean;
