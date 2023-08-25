@@ -1,6 +1,6 @@
 # Netmount
 
-Websocket based file transfer system designed for ComputerCraft.
+Websocket based file transfer system for ComputerCraft.
 
 ## Connecting
 
@@ -85,6 +85,11 @@ https://SITENAME/ {
         }
 }
 ```
+If logging access, run:
+```sh
+$ touch /var/log/SITENAME.access.log
+```
+
 ### Systemd
 
 1. Edit `netmountcc.service` to include your username and password on line 25.
@@ -92,7 +97,7 @@ https://SITENAME/ {
 3. Either:
     a. Put Netmount's working directory in `/var/www`, with `www-data` group read & execute permissions. OR
     b. Create a symlink at `/var/www/netmount` to the working directory, with the same permissions as above.
-4. Enable/Start the service:
+5. Enable/Start the service:
 ```sh
 $ systemctl enable netmountcc; systemctl start netmountcc
 ```

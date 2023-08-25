@@ -27,7 +27,7 @@ end
 
 local args = table.pack(...)
 
-local wsurl, url
+local url, auth
 do
     if #args < 3 then
         local keys = {
@@ -49,36 +49,19 @@ do
     end
     local username, password
     url, username, password = table.remove(args, 1), table.remove(args, 1), table.remove(args, 1)
-
-    local response, err = http.get(url, { Authorization = "Basic " .. b64(username .. ":" .. password) })
-    if not response then
-        error(err)
-    end
-    local secure = url:gsub("^http(s?).*", "%1")
-    local data = textutils.unserializeJSON(response.readAll())
-    response.close()
-    wsurl = "ws" .. secure .. "://" .. url:gsub("https?://", ""):gsub("/$", "") .. "/" .. data.uuid
+    auth = { Authorization = "Basic " .. b64(username .. ":" .. password) }
+    url = url:gsub("^http", "ws")
 end
 
 local ws
 local function request(data, timeout)
+    ws.send(textutils.serializeJSON(data))
+    local response = ws.receive(timeout or 5)
     local json
-    parallel.waitForAny(
-        function()
-            sleep(timeout or 5)
-        end,
-        function()
-            ws.send(textutils.serializeJSON(data))
-            while true do
-                local e, idurl, message = os.pullEvent()
-                if e == "websocket_message" and idurl == wsurl then
-                    json = textutils.unserializeJSON(message)
-                    return
-                end
-            end
-        end
-    )
-    if not json then
+    if response then
+        json = textutils.unserializeJSON(response)
+    end
+    if not (response or json) then
         return false, "Timeout"
     elseif json.ok then
         return true, json.data
@@ -394,41 +377,53 @@ local function isDriveRoot(path)
 end
 
 local function run()
-    http.websocketAsync(wsurl)
+    http.websocketAsync(url, auth)
     while true do
         local eventData = {os.pullEventRaw()}
         local event = eventData[1]
-        if event == "websocket_success" and eventData[2] == wsurl then
+        if event == "websocket_success" and eventData[2] == url then
             ws = eventData[3]
-            _G.fs = fs
+            local response = ws.receive(5)
+            if response then
+                local json = textutils.unserializeJSON(response)
+                if json.ok and json.data == "hello" then
+                    _G.fs = fs
 
-            local romfs, i = "", 1
-            for line in io.lines("rom/apis/fs.lua") do
-                if not (i > 9 and i < 14) then
-                    romfs = romfs .. line .. "\n"
+                    local romfs, i = "", 1
+                    for line in io.lines("rom/apis/fs.lua") do
+                        -- Rip out definition weirdness
+                        if not (i > 9 and i < 14) then
+                            romfs = romfs .. line .. "\n"
+                        end
+                        i = i + 1
+                    end
+                    assert(pcall(assert(load(romfs, "romfsapi", nil, _ENV))))
+                    fs.isDriveRoot = isDriveRoot
+                    os.queueEvent("netmount_success", netroot)
+                else
+                    os.queueEvent("netmount_failure", netroot)
+                    printError("Invalid websocket response")
+                    ws.close()
+                    return
                 end
-                i = i+1
+            else
+                os.queueEvent("netmount_failure", netroot)
+                printError("Failed to establish websocket connection")
+                ws.close()
+                return
             end
-            assert(pcall(assert(load(romfs, "romfsapi", nil, _ENV))))
-            fs.isDriveRoot = isDriveRoot
-        elseif event == "websocket_closed" and eventData[2] == wsurl then
-            ws.close()
+        elseif event == "websocket_closed" and eventData[2] == url then
+            os.queueEvent("netmount_closed", netroot)
+            printError(eventData[3])
+            sleep(2)
             return
         end
     end
 end
 
 parallel.waitForAny(run, function()
-    local id = os.startTimer(5)
-    while true do
-        local e, eid = os.pullEvent()
-        if ws or (e == "timer" and eid == id) then
-            break
-        end
-    end
-    if not ws then
-        error("Failed to create websocket")
-    else
+    local _, path = os.pullEvent("netmount_success")
+    if path == netroot then
         term.clear()
         term.setCursorPos(1, 1)
         term.setTextColor(colors.white)

@@ -4,3 +4,4 @@ bin
 yarn-error.log
 yarn.lock
 .vscode
+.env
