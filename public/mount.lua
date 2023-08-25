@@ -12,8 +12,8 @@ do
     -- encoding
     function b64(data)
         return ((data:gsub('.', function(x)
-            local r,b='',x:byte()
-            for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+            local r,c='',x:byte()
+            for i=8,1,-1 do r=r..(c%2^i-c%2^(i-1)>0 and '1' or '0') end
             return r;
         end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
             if (#x < 6) then return '' end
@@ -33,17 +33,18 @@ do
         local keys = {
             "netmount.url",
             "netmount.username",
-            "netmount.password"
+            "netmount.password",
+            "netmount.path"
         }
-        for i = 1, 3 do
+        for i = 1, #keys do
             args[i] = settings.get(keys[i]) or args[i]
         end
     end
     if #args < 3 then
-        print("Usage: mount <url> <username> <password>")
+        print("Usage: mount <url> <username> <password> [path]")
         print("Or, save url, username and password using set. Ex:")
-        print("set netmount.url https://mount.example.com")
-        print("setting keys are netmount.url, netmount.username, and netmount.password")
+        print("set netmount.url https://netmount.example.com")
+        print("setting keys are netmount.url, netmount.username, netmount.password, and netmount.path")
         return
     end
     local username, password
@@ -86,7 +87,7 @@ local function request(data, timeout)
     end
 end
 
-local netroot = "net"
+local netroot = table.remove(args, 1) or "net"
 local function toNetRoot(path)
     path = ofs.combine(path)
     local nreplaced
@@ -334,9 +335,11 @@ local function readHandle(path, binary)
     handle.readLine = function(withTrailing)
         assert(not internal.closed, "attempt to use a closed file")
         local nl = internal.buffer:sub(internal.pos+1, -1):find("\n")
-        local out = internal.buffer:sub(internal.pos+1, internal.pos+1 + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
-        if #out > 0 then
-            internal.pos = internal.pos + #out + ((withTrailing or not nl) and 0 or 1)
+        local out = internal.buffer:sub(internal.pos + 1,
+            internal.pos + 1 + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
+        local offset = #out + ((withTrailing or not nl) and 0 or 1)
+        if offset > 0 then
+            internal.pos = internal.pos + offset
             return out
         end
     end
@@ -428,8 +431,10 @@ parallel.waitForAny(run, function()
     else
         term.clear()
         term.setCursorPos(1, 1)
-        term.setTextColor(colors.lime)
-        print("Connected to " .. url)
+        term.setTextColor(colors.white)
+        write(url .. " mounted to ")
+        term.setTextColor(colors.green)
+        print("net")
         term.setTextColor(colors.white)
         if #args > 0 then
             shell.run(table.unpack(args))
