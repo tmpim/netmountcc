@@ -2,12 +2,16 @@ import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
-import { Attributes, methods, watch, getContents, getCapacity } from "./fs"
+import { Attributes, methods, watch, getContents, getCapacity, setNetPath } from "./fs"
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
 
-const luaPath = path.join(__dirname, "../public/mount.lua")
+if (process.env.PATH) {
+    setNetPath(process.env.PATH)
+}
+
+const luaPath =  path.join(__dirname, "../public/mount.lua")
 app.get('/mount.lua', async (req, res) => {
     res.status(200).type('text/plain').sendFile(luaPath)
 })
@@ -35,7 +39,6 @@ app.ws('/', async (ws, req) => {
         }, replacer))
         // file system watcher
         const closeListener = watch(async (path: string, attributes: false | Attributes) => {
-            console.log("sync invoked", path, attributes)
             ws.send(JSON.stringify({
                 ok: true,
                 type: "sync",
@@ -81,7 +84,7 @@ app.ws('/', async (ws, req) => {
             }
         })
         ws.on("close", (code, reason) => {
-            console.log(code, reason)
+            // console.log(code, reason)
             closeListener()
         })
     } else {

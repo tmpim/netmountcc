@@ -3,9 +3,15 @@ import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
 
+let netpath = pathlib.join(__dirname, "../data")
+
 function join(path: string) {
     var safePath = pathlib.normalize(path).replace(/^(\.\.(\/|\\|$))+/, '');
-    return pathlib.join(__dirname, "../data", safePath)
+    return pathlib.join(netpath, safePath)
+}
+
+export function setNetPath(path: string) {
+    netpath = path
 }
 
 export interface AsyncFSFunction {

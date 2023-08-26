@@ -30,12 +30,19 @@ To install required packages:
 ```sh
 $ yarn
 ```
+
+### .env File
+
 Create a `.env` file:
 ```env
 USERNAME=username
 PASSWORD=password
 ```
 where `username` and `password` are your choice of credentials.
+
+Optional valid env values include:
+ - `PATH`: The path that the netmount should serve to/from
+ - `PORT`: The port on which netmount should operate on
 
 Run:
 ```sh
@@ -50,6 +57,11 @@ Follow Workspace Setup steps up until running the server.
 Replace `SITENAME` with the domain name.
 
 ### Casketfile
+
+Casket is an optional step to enable automatic SSL cert handling, and proxying to the netmount from a domain. For more information see Casket's [README](https://github.com/tmpim/casket#readme)
+
+This example specifically takes into account Cloudflare's proxying system. If you are not using CF, the `cloudflare` block may be removed, and the `import cloudflare` line in the `SITENAME` block can be removed/commented out.
+
 ```
 # List of cloudflare IPs to unwrap to real IPs.
 (cloudflare) {
@@ -106,9 +118,11 @@ This may have to be run as root, and chown'd to the www-data user.
 
 1. Edit `netmountcc.service` to include your username and password on line 25.
 2. Move/Copy `netmountcc.service` to `/etc/systemd/system/netmountcc.service`.
+    a. If not using casket, remove `casket.service` from line 3.
 3. Either:
-    a. Put Netmount's working directory in `/var/www`, with `www-data` group read & execute permissions. OR
+    a. Put Netmount's working directory in `/var/www`, with `www-data` read & execute permissions. OR
     b. Create a symlink at `/var/www/netmount` to the working directory, with the same permissions as above.
+4. Create the data directory (by default `./data`), and ensure `www-data` has read/write permissions to `./data`.
 5. Enable/Start the service:
 ```sh
 $ systemctl enable netmountcc; systemctl start netmountcc
