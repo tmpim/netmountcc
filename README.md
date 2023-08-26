@@ -14,12 +14,14 @@ or use the settings API:
 > set netmount.url <url>
 > set netmount.username <username>
 > set netmount.password <password>
+> set netmount.path <path>
 > wget <url>/mount.lua
 ```
 where:
 - `url` - the URL of the netmount server (including `http://` or `https://`!)
 - `username` - the chosen netmount username 
 - `password` - the chosen netmount password 
+- `path` - the chosen path the netmount will be located
 For information on setting up a username and password, see [Production Setup](#production-setup)
 
 ## Workspace Setup
@@ -28,14 +30,22 @@ To install required packages:
 ```sh
 $ yarn
 ```
+Create a `.env` file:
+```env
+USERNAME=username
+PASSWORD=password
+```
+where `username` and `password` are your choice of credentials.
 
 Run:
 ```sh
-$ yarn run ts-node src/index.ts <username> <password>
+$ yarn run ts-node src/index.ts
 ```
 The server runs on `localhost:4000`.
 
 ## Production Setup
+
+Follow Workspace Setup steps up until running the server.
 
 Replace `SITENAME` with the domain name.
 
@@ -79,16 +89,18 @@ https://SITENAME/ {
         import cloudflare # Comment out if not using cloudflare proxying
         tls self_signed # Self-sign the TLS. If not using cloudflare proxying, remove 'self_signed'.
         log /var/log/SITENAME.access.log
-        proxy / 127.0.0.1:3000 {
-            transparent # allow the app on 3000 to see visitor's IPs via X-Forwarded-For header
+        proxy / 127.0.0.1:4000 {
+            transparent # allow the app on 4000 to see visitor's IPs via X-Forwarded-For header
             websocket
         }
 }
 ```
+
 If logging access, run:
 ```sh
 $ touch /var/log/SITENAME.access.log
 ```
+This may have to be run as root, and chown'd to the www-data user.
 
 ### Systemd
 

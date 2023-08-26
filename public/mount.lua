@@ -1,6 +1,8 @@
 local ofs = _G.fs
 local fs = {}
 
+-- [[ Simple base64 Encoder ]] --
+
 local b64
 do
     -- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
@@ -24,6 +26,7 @@ do
     end
 end
 
+-- [[ Argument Parsing ]] --
 
 local args = table.pack(...)
 
@@ -53,24 +56,22 @@ do
     url = url:gsub("^http", "ws")
 end
 
-local ws
-local function request(data, timeout)
-    ws.send(textutils.serializeJSON(data))
-    local response = ws.receive(timeout or 5)
-    local json
-    if response then
-        json = textutils.unserializeJSON(response)
-    end
-    if not (response or json) then
-        return false, "Timeout"
-    elseif json.ok then
-        return true, json.data
-    else
-        return false, json.err
+local netroot = table.remove(args, 1) or "net"
+assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
+
+-- [[ Websocket Request/Response Function & Netmount fs Information ]] --
+
+local request, syncData
+
+-- [[ Local helper, and future override functions ]] --
+
+local function unserializeJSON(str)
+    local ok, data = pcall(textutils.unserialiseJSON, str)
+    if ok then
+        return data
     end
 end
 
-local netroot = table.remove(args, 1) or "net"
 local function toNetRoot(path)
     path = ofs.combine(path)
     local nreplaced
@@ -84,6 +85,24 @@ local function toNetRoot(path)
     end
 end
 
+local function getAttributes(path)
+    return syncData.contents[path]
+end
+
+local function isDriveRoot(path)
+    if toNetRoot(path) then
+        if #path == 0 then
+            return true
+        else
+            return false
+        end
+    else
+        return ofs.isDriveRoot(path)
+    end
+end
+
+-- [[ Functions that can be directly ripped from old fs API ]] --
+
 local copyold = {
     "combine",
     "getName",
@@ -94,15 +113,129 @@ for _, fn in ipairs(copyold) do
     fs[fn] = ofs[fn]
 end
 
+-- [[ Overrides ]] --
+
+fs.list = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        local attrs = syncData.contents[path]
+        if attrs and attrs.isDir then
+            local out = {}
+            for npath in pairs(syncData.contents) do
+                local nnpath, suc = npath:gsub("^"..path.."/?", "")
+                if suc == 1 and #nnpath > 0 and not nnpath:find("/") then
+                    out[#out + 1] = nnpath
+                end
+            end
+            return out
+        else
+            error(fs.combine(netroot, path)..": Not a directory")
+        end
+    else
+        local list = ofs.list(path)
+        if #path == 0 then
+            list[#list + 1] = "net"
+        end
+        return list
+    end
+end
+
+fs.attributes = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        local attributes = getAttributes(path)
+        if attributes then
+            return getAttributes(path)
+        else
+            error(fs.combine(netroot, path)..": No such file ")
+        end
+    else
+        return ofs.attributes(path)
+    end
+end
+
+fs.exists = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        return getAttributes(path) and true or false
+    else
+        return ofs.exists(path)
+    end
+end
+
+fs.isDir = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        local attributes = getAttributes(path)
+        return (attributes and attributes.isDir) and true or false
+    else
+        return ofs.isDir(path)
+    end
+end
+
+fs.isReadOnly = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        local attributes = getAttributes(path)
+        return (attributes and attributes.isReadOnly) and true or false
+    else
+        return ofs.isReadOnly(path)
+    end
+end
+
+fs.getDrive = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        return "net"
+    else
+        return ofs.getDrive(path)
+    end
+end
+
+fs.getSize = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        local attributes = getAttributes(path)
+        if attributes then
+            return attributes.size
+        else
+            error(fs.combine(netroot, path) .. ": No such file ")
+        end
+    else
+        return ofs.getSize(path)
+    end
+end
+
+fs.getFreeSpace = function(path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        return syncData.capacity[1]
+    else
+        return ofs.getSize(path)
+    end
+end
+
+fs.getCapacity = function (path)
+    local net
+    net, path = toNetRoot(path)
+    if net then
+        return syncData.capacity[2]
+    else
+        return ofs.getSize(path)
+    end
+end
+
+-- [[ Network Dependent Overrides ]] --
+
 local singleOverrides = {
-    "attributes",
-    "exists",
-    "isDir",
-    "isReadOnly",
-    "getDrive",
-    "getSize",
-    "getFreeSpace",
-    "getCapacity",
     "makeDir",
     "delete"
 }
@@ -185,27 +318,7 @@ for _, name in ipairs(doubleOverrides) do
     end
 end
 
-fs.list = function(path)
-    local net
-    net, path = toNetRoot(path)
-    if net then
-        local ok, err = request({
-            type = "list",
-            path = path
-        })
-        if ok then
-            return err
-        else
-            error(err)
-        end
-    else
-        local list = ofs.list(path)
-        if #path == 0 then
-            list[#list + 1] = "net"
-        end
-        return list
-    end
-end
+-- [[ Network Dependent File Handles ]] --
 
 local function genericHandle(path, binary)
     local internal = {
@@ -332,7 +445,7 @@ local function readHandle(path, binary)
         local pos = internal.pos
         local out = internal.buffer:sub(pos, -1)
         if #out > 0 then
-            internal.pos = #internal.buffer
+            internal.pos = internal.pos + #out
             return out
         end
     end
@@ -364,81 +477,108 @@ fs.open = function(path, mode)
     end
 end
 
-local function isDriveRoot(path)
-    if toNetRoot(path) then
-        if #path == 0 then
-            return true
-        else
-            return false
-        end
-    else
-        return ofs.isDriveRoot(path)
-    end
-end
+-- [[ Main Program / Connection handlers ]] --
 
-local function run()
-    http.websocketAsync(url, auth)
+local function sync()
     while true do
-        local eventData = {os.pullEventRaw()}
-        local event = eventData[1]
-        if event == "websocket_success" and eventData[2] == url then
-            ws = eventData[3]
-            local response = ws.receive(5)
-            if response then
-                local json = textutils.unserializeJSON(response)
-                if json.ok and json.data == "hello" then
-                    _G.fs = fs
-
-                    local romfs, i = "", 1
-                    for line in io.lines("rom/apis/fs.lua") do
-                        -- Rip out definition weirdness
-                        if not (i > 9 and i < 14) then
-                            romfs = romfs .. line .. "\n"
-                        end
-                        i = i + 1
-                    end
-                    assert(pcall(assert(load(romfs, "romfsapi", nil, _ENV))))
-                    fs.isDriveRoot = isDriveRoot
-                    os.queueEvent("netmount_success", netroot)
-                else
-                    os.queueEvent("netmount_failure", netroot)
-                    printError("Invalid websocket response")
-                    ws.close()
-                    return
-                end
-            else
-                os.queueEvent("netmount_failure", netroot)
-                printError("Failed to establish websocket connection")
-                ws.close()
-                return
+        local _, wsurl, res = os.pullEventRaw("websocket_message")
+        if wsurl == url and res then
+            local json = unserializeJSON(res)
+            if json.type == "sync" and json.data then
+                syncData.contents[json.data.path] = json.data.attributes or nil
             end
-        elseif event == "websocket_closed" and eventData[2] == url then
-            os.queueEvent("netmount_closed", netroot)
-            printError(eventData[3])
-            sleep(2)
-            return
         end
     end
 end
 
-parallel.waitForAny(run, function()
-    local _, path = os.pullEvent("netmount_success")
-    if path == netroot then
-        term.clear()
-        term.setCursorPos(1, 1)
-        term.setTextColor(colors.white)
-        write(url .. " mounted to ")
-        term.setTextColor(colors.green)
-        print("net")
-        term.setTextColor(colors.white)
-        if #args > 0 then
-            shell.run(table.unpack(args))
-        else
-            shell.run("shell")
+local function close()
+    while true do
+        local _, wsurl, reason, code = os.pullEventRaw("websocket_closed")
+        if wsurl == url then
+            error("Websocket closed: "..(reason or "reason unknown")..", "..tostring(code))
         end
     end
-end)
-_G.fs = ofs
-if ws then
-    ws.close()
+end
+
+local function subshell()
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.lightBlue)
+    write(url)
+    term.setTextColor(colors.white)
+    write(" mounted to ")
+    term.setTextColor(colors.green)
+    print(netroot)
+    term.setTextColor(colors.white)
+    sleep(2)
+    if #args > 0 then
+        shell.run(table.unpack(args))
+    else
+        shell.run("shell")
+    end
+end
+
+local function setup()
+    http.websocketAsync(url, auth)
+    local eventData = { os.pullEventRaw() }
+    local event = eventData[1]
+    if event == "websocket_success" and eventData[2] == url then
+        local ws = eventData[3]
+        local res = unserializeJSON(ws.receive(5))
+        if res and res.ok and res.type == "hello" then
+            syncData = res.data
+            _G.fs = fs
+
+            local romfs, i = "", 1
+            for line in io.lines("rom/apis/fs.lua") do
+                -- Rip out definition weirdness
+                if not (i > 9 and i < 14) then
+                    romfs = romfs .. line .. "\n"
+                end
+                i = i + 1
+            end
+            assert(pcall(assert(load(romfs, "romfsapi", nil, _ENV))))
+            fs.isDriveRoot = isDriveRoot
+
+            request = function(data, timeout)
+                assert(data.type, "Missing request type")
+                ws.send(textutils.serializeJSON(data))
+                local reqres
+                parallel.waitForAny(function()
+                    sleep(timeout or 5)
+                end, function()
+                    while true do
+                        local response = ws.receive()
+                        if response then
+                            local json = unserializeJSON(response)
+                            if json.type == data.type then
+                                reqres = json
+                                return
+                            end
+                        end
+                    end
+                end)
+                if not reqres then
+                    return false, "Timeout"
+                elseif reqres.ok then
+                    return true, reqres.data
+                else
+                    return false, reqres.err
+                end
+            end
+            return true, ws
+        else
+            ws.close()
+            return false, "Failed to complete netmount handshake"
+        end
+    end
+end
+
+local suc, ws = setup()
+if suc then
+    parallel.waitForAny(sync, subshell, close)
+    if ws then
+        ws.close()
+    end
+    _G.fs = ofs
 end
