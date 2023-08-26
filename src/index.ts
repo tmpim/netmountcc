@@ -7,8 +7,8 @@ import { Attributes, methods, watch, getContents, getCapacity, setNetPath } from
 const app = expressWs(express()).app
 app.enable("trust proxy")
 
-if (process.env.PATH) {
-    setNetPath(process.env.PATH)
+if (process.env.MPATH) {
+    setNetPath(process.env.MPATH)
 }
 
 const luaPath =  path.join(__dirname, "../public/mount.lua")
@@ -50,7 +50,7 @@ app.ws('/', async (ws, req) => {
             }))
         })
         // heartbeat
-        setInterval(ws.ping, 1000 * 20)
+        setInterval(() => ws.ping(), 1000 * 20)
         // other message listener
         ws.on("message", async (data, binary) => {
             try {

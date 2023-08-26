@@ -41,7 +41,7 @@ PASSWORD=password
 where `username` and `password` are your choice of credentials.
 
 Optional valid env values include:
- - `PATH`: The path that the netmount should serve to/from
+ - `MPATH`: The path that the netmount should serve to/from
  - `PORT`: The port on which netmount should operate on
 
 Run:
