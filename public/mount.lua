@@ -122,10 +122,10 @@ fs.list = function(path)
         local attrs = syncData.contents[path]
         if attrs and attrs.isDir then
             local out = {}
-            for npath in pairs(syncData.contents) do
-                local nnpath, suc = npath:gsub("^"..path.."/?", "")
-                if suc == 1 and #nnpath > 0 and not nnpath:find("/") then
-                    out[#out + 1] = nnpath
+            for fullpath in pairs(syncData.contents) do
+                local dir = fs.getDir(fullpath)
+                if dir == path then
+                    out[#out + 1] = fs.getName(fullpath)
                 end
             end
             return out
@@ -266,7 +266,10 @@ local doubleOverrides = {
 }
 
 for _, name in ipairs(doubleOverrides) do
-    fs[name] = function(path, dest)
+    local function relocate(path, dest, root)
+        if fs.exists(dest) then
+            error("/"..fs.combine(dest)..": File exists")
+        end
         local pnet, dnet
         pnet, path = toNetRoot(path)
         dnet, dest = toNetRoot(dest)
@@ -276,44 +279,64 @@ for _, name in ipairs(doubleOverrides) do
                 path = path,
                 dest = dest
             })
-            if ok then
-                return err
-            else
+            if not ok then
                 error(err)
             end
         elseif not (pnet or dnet) then
             return ofs[name](path, dest)
         elseif pnet and not dnet then -- from server to client
-            local ok, err = request({
-                type = "readFile",
-                path = path,
-            })
-            if ok then
-                local file = ofs.open(dest, "w")
-                file.write(err)
+            if fs.isDir(fs.combine(netroot, dest)) then
+                local list = fs.list(fs.combine(netroot, dest))
+                for _, p in ipairs(list) do
+                    --print(fs.combine(netroot, dest, p), fs.combine(path, p), p)
+                    relocate(fs.combine(netroot, dest, p), fs.combine(path, p), false)
+                end
+            else
+                local ok, data = request({
+                    type = "readFile",
+                    path = path,
+                })
+                if ok then
+                    local file = ofs.open(dest, "w")
+                    file.write(data)
+                    file.close()
+                else
+                    error(data)
+                end
+                if name == "move" then
+                    return fs.delete, fs.combine(netroot, path)
+                end
+            end
+        else -- from client to server
+            if fs.isDir(path) then
+                local list = fs.list(path)
+                for _, p in ipairs(list) do
+                    --print(fs.combine(path, p), fs.combine(netroot, dest, p))
+                    relocate(fs.combine(path, p), fs.combine(netroot, dest, p), false)
+                end
+            else
+                local file = ofs.open(path, "r")
+                local data = file.readAll()
                 file.close()
-                if name == "move" then
-                    fs.delete(fs.combine(netroot, path))
+                local ok, err = request({
+                    type = "writeFile",
+                    path = dest,
+                    data = data
+                })
+                if not ok then
+                    error(err)
                 end
-            else
-                error(err)
             end
-        else                          -- from client to server
-            local file = ofs.open(path, "r")
-            local data = file.readAll()
-            file.close()
-            local ok, err = request({
-                type = "writeFile",
-                path = dest,
-                data = data
-            })
-            if ok then
-                if name == "move" then
-                    ofs.delete(path)
-                end
-            else
-                error(err)
+            if name == "move" then
+                return ofs.delete, path
             end
+        end
+    end
+
+    fs[name] = function(path, dest)
+        local func, p = relocate(path, dest, true)
+        if func then
+            func(p)
         end
     end
 end
@@ -581,4 +604,6 @@ if suc then
         ws.close()
     end
     _G.fs = ofs
+else
+    printError("Setup failed.")
 end

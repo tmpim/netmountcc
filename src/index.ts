@@ -4,6 +4,12 @@ import path from 'path';
 import 'dotenv/config'
 import { Attributes, methods, watch, getContents, getCapacity, setNetPath } from "./fs"
 
+function debug(message?: any, ...optionalParams: any[]) {
+    if (process.env.DEBUG) {
+        console.log(message, optionalParams)
+    }
+}
+
 const app = expressWs(express()).app
 app.enable("trust proxy")
 
@@ -63,9 +69,9 @@ app.ws('/', async (ws, req) => {
                 }
                 const method = methods.get(content.type)
                 if (method) {
-                    // console.log("in: ", data)
+                    debug("in: ", data)
                     const out = JSON.stringify(await method(content))
-                    // console.log("out: ", out)
+                    debug("out: ", out)
                     ws.send(out)
                 } else if (content.type == "keepalive") {
                     // no-op
@@ -84,7 +90,7 @@ app.ws('/', async (ws, req) => {
             }
         })
         ws.on("close", (code, reason) => {
-            // console.log(code, reason)
+            debug(code, reason)
             closeListener()
         })
     } else {

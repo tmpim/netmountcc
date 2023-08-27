@@ -5,6 +5,14 @@ import fsp from 'fs/promises';
 
 let netpath = pathlib.join(__dirname, "../data")
 
+const fileExists = async (path: string) => {
+    try {
+        return await fsp.stat(path)
+    } catch {
+        return false;
+    }
+};
+
 function join(path: string) {
     var safePath = pathlib.normalize(path).replace(/^(\.\.(\/|\\|$))+/, '');
     return pathlib.join(netpath, safePath)
@@ -187,7 +195,25 @@ methods.set("makeDir", async (data: any) => {
     }
 })
 methods.set("writeFile", async (data: any) => {
-    await fsp.writeFile(join(data.path), data.data)
+    const attrs = await getAttributes(data.path)
+    if (attrs) {
+        if (attrs.isDir) {
+            return {
+                ok: false,
+                type: "writeFile",
+                data: "/"+data.path+": Cannot write to directory"
+            }
+        } else if (attrs.isReadOnly) {
+            return {
+                ok: false,
+                type: "writeFile",
+                data: "/"+data.path+": Access denied"
+            }
+        }
+    }
+    const path = join(data.path)
+    await fsp.mkdir(pathlib.dirname(path), { recursive: true })
+    await fsp.writeFile(path, data.data)
     return {
         ok: true,
         type: "writeFile",
@@ -195,7 +221,16 @@ methods.set("writeFile", async (data: any) => {
     }
 })
 methods.set("readFile", async (data: any) => {
-    const readData = await fsp.readFile(join(data.path))
+    const attrs = await getAttributes(data.path)
+    if (!attrs || (attrs && attrs.isDir)) {
+        return {
+            ok: false,
+            type: "readFile",
+            err: "/"+data.path+": No such file"
+        }
+    }
+    const path = join(data.path)
+    const readData = await fsp.readFile(path)
     return {
         ok: true,
         type: "readFile",
