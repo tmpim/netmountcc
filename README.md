@@ -54,7 +54,12 @@ The server runs on `localhost:4000`.
 
 Follow Workspace Setup steps up until running the server.
 
-Replace `SITENAME` with the domain name.
+Compile project:
+```sh
+$ tsc
+```
+
+For all further steps replace `SITENAME` with the domain name.
 
 ### Casketfile
 
@@ -125,5 +130,6 @@ This may have to be run as root, and chown'd to the www-data user.
 4. Create the data directory (by default `./data`), and ensure `www-data` has read/write permissions to `./data`.
 5. Enable/Start the service:
 ```sh
-$ systemctl enable netmountcc; systemctl start netmountcc
+$ systemctl enable netmountcc
+$ systemctl start netmountcc
 ```
