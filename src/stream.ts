@@ -26,9 +26,9 @@ class Stream {
 export class ReadStream extends Stream {
 
     async run() {
-        const data = (await fsp.readFile(this.path)).toString()
-        const listener = (data: RawData, binary: boolean) => {
-            const res = JSON.parse(data.toString())
+        const data = btoa(await fsp.readFile(this.path, { encoding: 'binary'}))
+        const listener = (rawdata: RawData, binary: boolean) => {
+            const res = JSON.parse(rawdata.toString())
             if (res.type == "readStream" && res.uuid == this.uuid) {
                 send(res.chunk)
             }
@@ -92,11 +92,11 @@ export class WriteStream extends Stream {
                 this.ws.removeListener("message", listener)
                 debug(`saving chunks`)
                 await fsp.mkdir(pathlib.dirname(this.path), { recursive: true })
-                await fsp.writeFile(this.path, data)
+                debug(data)
+                await fsp.writeFile(this.path, atob(data), { encoding: 'binary'})
             }
         }
         this.ws.on("message", listener)
-
     }
 
     constructor(uuid: string, path: string, ws: WebSocket) {

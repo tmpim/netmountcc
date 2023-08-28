@@ -6,15 +6,13 @@ import { v4 } from 'uuid';
 import { WriteStream, ReadStream } from './stream'
 import {WebSocket, RawData} from 'ws'
 
-let netpath: string;
-
-const fileExists = async (path: string) => {
-    try {
-        return await fsp.stat(path)
-    } catch {
-        return false;
+function debug(message?: any, ...optionalParams: any[]) {
+    if (process.env.DEBUG) {
+        console.log(message, ...optionalParams)
     }
-};
+}
+
+let netpath: string;
 
 function join(path: string) {
     var safePath = pathlib.normalize(path).replace(/^(\.\.(\/|\\|$))+/, '');
@@ -91,7 +89,7 @@ async function run() {
 
 export function start(path: string) {
     netpath = path
-    console.log(netpath)
+    debug(netpath)
     run()
 }
 

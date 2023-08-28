@@ -2,7 +2,7 @@ local ofs = _G.fs
 
 -- [[ Simple base64 Encoder ]] --
 
-local b64
+local b64e, b64d
 do
     -- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
     -- licensed under the terms of the LGPL2
@@ -11,17 +11,33 @@ do
     local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
     -- encoding
-    function b64(data)
+    function b64e(data)
         return ((data:gsub('.', function(x)
-            local r,c='',x:byte()
-            for i=8,1,-1 do r=r..(c%2^i-c%2^(i-1)>0 and '1' or '0') end
+            local r, c = '', x:byte()
+            for i = 8, 1, -1 do r = r .. (c % 2 ^ i - c % 2 ^ (i - 1) > 0 and '1' or '0') end
             return r;
-        end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+        end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
             if (#x < 6) then return '' end
+            local c = 0
+            for i = 1, 6 do c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0) end
+            return b:sub(c + 1, c + 1)
+        end) .. ({ '', '==', '=' })[#data % 3 + 1])
+    end
+
+    -- decoding
+    function b64d(data)
+        data = string.gsub(data, '[^'..b..'=]', '')
+        return (data:gsub('.', function(x)
+            if (x == '=') then return '' end
+            local r,f='',(b:find(x)-1)
+            for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+            return r;
+        end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+            if (#x ~= 8) then return '' end
             local c=0
-            for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-            return b:sub(c+1,c+1)
-        end)..({ '', '==', '=' })[#data%3+1])
+            for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+            return string.char(c)
+        end))
     end
 end
 
@@ -51,7 +67,7 @@ do
     end
     local username, password
     url, username, password = table.remove(args, 1), table.remove(args, 1), table.remove(args, 1)
-    auth = { Authorization = "Basic " .. b64(username .. ":" .. password) }
+    auth = { Authorization = "Basic " .. b64e(username .. ":" .. password) }
     url = url:gsub("^http", "ws")
 end
 
@@ -140,7 +156,7 @@ local function initfs(ws, syncData)
                         chunk = chunk
                     }))
                 elseif e == "websocket_message" and matches and response.complete then
-                    return true, combined
+                    return true, b64d(combined)
                 elseif e == "websocket_close" and wsurl == url then
                     return false, "Websocket Closed"
                 end
@@ -174,6 +190,10 @@ local function initfs(ws, syncData)
     end
 
     local function writeStream(path, contents)
+        contents = b64e(contents)
+        local f = ofs.open("debug.txt", "w")
+        f.write(contents)
+        f.close()
         local uuid = v4()
         local ok, data = request({
             ok = true,
@@ -427,7 +447,7 @@ local function initfs(ws, syncData)
                 else
                     local ok, data = readStream(path)
                     if ok then
-                        local file = ofs.open(dest, "w")
+                        local file = ofs.open(dest, "wb")
                         file.write(data)
                         file.close()
                     else
@@ -445,7 +465,7 @@ local function initfs(ws, syncData)
                         relocate(fs.combine(path, p), fs.combine(netroot, dest, p), false)
                     end
                 else
-                    local file = ofs.open(path, "r")
+                    local file = ofs.open(path, "rb")
                     local data = file.readAll()
                     file.close()
                     local ok, err = writeStream(dest, data)
