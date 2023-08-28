@@ -470,7 +470,7 @@ local function initfs(ws, syncData)
     }
 
     for _, name in ipairs(doubleOverrides) do
-        local function relocate(path, dest, root)
+        local function relocate(path, dest)
             if fs.exists(dest) then
                 error("/"..fs.combine(dest)..": File exists")
             end
@@ -492,8 +492,7 @@ local function initfs(ws, syncData)
                 if fs.isDir(fs.combine(netroot, dest)) then
                     local list = fs.list(fs.combine(netroot, dest))
                     for _, p in ipairs(list) do
-                        --print(fs.combine(netroot, dest, p), fs.combine(path, p), p)
-                        relocate(fs.combine(netroot, dest, p), fs.combine(path, p), false)
+                        relocate(fs.combine(netroot, dest, p), fs.combine(path, p))
                     end
                 else
                     local ok, data = readStream(path)
@@ -512,8 +511,7 @@ local function initfs(ws, syncData)
                 if fs.isDir(path) then
                     local list = fs.list(path)
                     for _, p in ipairs(list) do
-                        --print(fs.combine(path, p), fs.combine(netroot, dest, p))
-                        relocate(fs.combine(path, p), fs.combine(netroot, dest, p), false)
+                        relocate(fs.combine(path, p), fs.combine(netroot, dest, p))
                     end
                 else
                     local file = ofs.open(path, "rb")
@@ -531,7 +529,7 @@ local function initfs(ws, syncData)
         end
 
         fs[name] = function(path, dest)
-            local func, p = relocate(path, dest, true)
+            local func, p = relocate(path, dest)
             if func then
                 func(p)
             end

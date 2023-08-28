@@ -117,13 +117,14 @@ export const methods: Map<string, AsyncFSFunction> = new Map()
 
 methods.set("move", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
+        const path = join(data.path)
         try {
-            fsp.cp(join(data.path), join(data.dest), {
+            await fsp.cp(path, join(data.dest), {
                 recursive: true,
                 force: false,
                 errorOnExist: true
             })
-            fsp.rm(join(data.path))
+            await fsp.rm(path)
             return {
                 ok: true,
                 type: "move",
@@ -147,7 +148,7 @@ methods.set("move", async (data: any, ws: WebSocket) => {
 methods.set("copy", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
         try {
-            fsp.cp(join(data.path), join(data.dest), {
+            await fsp.cp(join(data.path), join(data.dest), {
                 recursive: true,
                 force: false,
                 errorOnExist: true
@@ -174,7 +175,7 @@ methods.set("copy", async (data: any, ws: WebSocket) => {
 })
 methods.set("delete", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
-        fsp.rm(join(data.path), {
+        await fsp.rm(join(data.path), {
             recursive: true
         })
         return {

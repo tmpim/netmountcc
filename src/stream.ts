@@ -34,7 +34,7 @@ export class ReadStream extends Stream {
             }
         }
         const send = (chunk: number) => {
-            const subchunk = data?.substring(chunkSize * chunk, (chunkSize * (chunk + 1)) + 1)
+            const subchunk = data?.substring(chunkSize * chunk, (chunkSize * (chunk + 1)))
             if (subchunk.length > 0) {
                 this.ws.send(JSON.stringify({
                     ok: true,
@@ -91,8 +91,7 @@ export class WriteStream extends Stream {
                 this.ws.removeListener("message", listener)
                 debug(`saving chunks`)
                 await fsp.mkdir(pathlib.dirname(this.path), { recursive: true })
-                debug(data)
-                await fsp.writeFile(this.path, atob(data), { encoding: 'binary'})
+                await fsp.writeFile(this.path, data, { encoding: 'base64'})
             }
         }
         this.ws.on("message", listener)
