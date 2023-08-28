@@ -82,7 +82,140 @@ end
 
 -- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
 
-local function initfs(request, syncData)
+local chunkSize = 2^16
+
+local function initfs(ws, syncData)
+
+    local function request(data, timeout)
+        assert(data.type, "Missing request type")
+        ws.send(textutils.serializeJSON(data))
+        local reqres
+        parallel.waitForAny(function()
+            sleep(timeout or 5)
+        end, function()
+            while true do
+                local _, wsurl, response = os.pullEventRaw("websocket_message")
+                if wsurl == url and response then
+                    local json = unserializeJSON(response)
+                    if json.type == data.type then
+                        reqres = json
+                        return
+                    end
+                end
+            end
+        end)
+        if not reqres then
+            return false, "Timeout"
+        elseif reqres.ok then
+            return true, reqres.data
+        else
+            return false, reqres.err
+        end
+    end
+
+    local function readStream(path)
+        local ok, data = request({
+            ok = true,
+            type = "readFile",
+            path = path
+        })
+        if not ok then
+            error(data)
+        elseif not data.uuid then
+            error("Missing stream UUID")
+        else
+            local combined = ""
+            local chunk = 0
+            while true do
+                local e, wsurl, rawdata = os.pullEventRaw()
+                local response = unserializeJSON(rawdata)
+                local matches = (wsurl == url and response and response.type == "readStream" and response.uuid == data.uuid)
+                if e == "websocket_message" and matches and response.chunk == chunk then
+                    combined = combined .. response.data
+                    chunk = chunk + 1
+                    ws.send(textutils.serializeJSON({
+                        ok = true,
+                        type = "readStream",
+                        uuid = data.uuid,
+                        chunk = chunk
+                    }))
+                elseif e == "websocket_message" and matches and response.complete then
+                    return true, combined
+                elseif e == "websocket_close" and wsurl == url then
+                    return false, "Websocket Closed"
+                end
+            end
+        end
+    end
+
+    local v4
+    do
+        local dashes = {
+            [8] = true,
+            [12] = true,
+            [16] = true,
+            [20] = true
+        }
+        function v4()
+            local out = {}
+            for i = 1, 32 do
+                local val = math.random(0, 15)
+                if val < 10 then
+                    out[#out + 1] = val
+                else
+                    out[#out + 1] = string.char(val + 87)
+                end
+                if dashes[i] then
+                    out[#out + 1] = "-"
+                end
+            end
+            return table.concat(out, "")
+        end
+    end
+
+    local function writeStream(path, contents)
+        local uuid = v4()
+        local ok, data = request({
+            ok = true,
+            type = "writeFile",
+            path = path,
+            uuid = uuid
+        })
+        local function send(chunk)
+            local subchunk = contents:sub(chunkSize * chunk, chunkSize * (chunk + 1))
+            if #subchunk > 0 then
+                ws.send(textutils.serializeJSON({
+                    ok = true,
+                    type = "writeStream",
+                    uuid = uuid,
+                    chunk = chunk,
+                    data = subchunk
+                }))
+            else
+                ws.send(textutils.serializeJSON({
+                    ok = true,
+                    type = "writeStream",
+                    uuid = uuid,
+                    complete = true
+                }))
+                return true
+            end
+        end
+        send(0)
+        while true do
+            local e, wsurl, rawdata = os.pullEventRaw()
+            local response = unserializeJSON(rawdata)
+            local matches = (wsurl == url and response and response.type == "writeStream" and response.uuid == data.uuid)
+            if e == "websocket_message" and matches and response.chunk then
+                if send(response.chunk) then
+                    return true
+                end
+            elseif e == "websocket_close" and wsurl == url then
+                return false, "Websocket Closed"
+            end
+        end
+    end
+
     local fs = {}
 
     local function getAttributes(path)
@@ -219,7 +352,7 @@ local function initfs(request, syncData)
         if net then
             return syncData.capacity[1]
         else
-            return ofs.getSize(path)
+            return ofs.getFreeSpace(path)
         end
     end
 
@@ -229,7 +362,7 @@ local function initfs(request, syncData)
         if net then
             return syncData.capacity[2]
         else
-            return ofs.getSize(path)
+            return ofs.getCapacity(path)
         end
     end
 
@@ -292,16 +425,13 @@ local function initfs(request, syncData)
                         relocate(fs.combine(netroot, dest, p), fs.combine(path, p), false)
                     end
                 else
-                    local ok, data = request({
-                        type = "readFile",
-                        path = path,
-                    })
+                    local ok, data = readStream(path)
                     if ok then
                         local file = ofs.open(dest, "w")
                         file.write(data)
                         file.close()
                     else
-                        error(data)
+                        error("Read stream error: "..data)
                     end
                     if name == "move" then
                         return fs.delete, fs.combine(netroot, path)
@@ -318,13 +448,9 @@ local function initfs(request, syncData)
                     local file = ofs.open(path, "r")
                     local data = file.readAll()
                     file.close()
-                    local ok, err = request({
-                        type = "writeFile",
-                        path = dest,
-                        data = data
-                    })
+                    local ok, err = writeStream(dest, data)
                     if not ok then
-                        error(err)
+                        error("Write stream error: "..data)
                     end
                 end
                 if name == "move" then
@@ -382,16 +508,13 @@ local function initfs(request, syncData)
     local function writeHandle(path, binary, append)
         local handle, internal = genericHandle(path, binary)
         if append then
-            local ok, data = request({
-                type = "readFile",
-                path = path,
-            })
+            local ok, data = readStream(path)
             if ok then
                 internal.buffer = data
                 internal.ibuffer = data
                 internal.pos = #data
             else
-                error(data)
+                error("Read stream error: "..data)
             end
         end
 
@@ -408,13 +531,9 @@ local function initfs(request, syncData)
             assert(not internal.closed, "attempt to use a closed file")
             if internal.ibuffer ~= internal.buffer then
                 internal.ibuffer = internal.buffer
-                local ok, data = request({
-                    type = "writeFile",
-                    path = path,
-                    data = internal.buffer
-                })
+                local ok, data = writeStream(path, internal.buffer:gsub("\n$", ""))
                 if not ok then
-                    error(data)
+                    error("Write stream error: "..data)
                 end
             end
         end
@@ -436,20 +555,17 @@ local function initfs(request, syncData)
 
     local function readHandle(path, binary)
         local handle, internal = genericHandle(path, binary)
-        local ok, data = request({
-            type = "readFile",
-            path = path,
-        })
+        local ok, data = readStream(path)
         if ok then
             internal.buffer = data
         else
-            error(data)
+            error("Read stream error: "..data)
         end
 
         handle.read = function(count)
             assert(not internal.closed, "attempt to use a closed file")
             local out = internal.buffer:sub(internal.pos+1, internal.pos+count)
-            if #out > 0 then
+            if internal.pos <= #internal.buffer then
                 internal.pos = internal.pos + #out
                 return out
             end
@@ -457,11 +573,11 @@ local function initfs(request, syncData)
 
         handle.readLine = function(withTrailing)
             assert(not internal.closed, "attempt to use a closed file")
-            local nl = internal.buffer:sub(internal.pos+1, -1):find("\n")
-            local out = internal.buffer:sub(internal.pos + 1,
-                internal.pos + 1 + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
-            local offset = #out + ((withTrailing or not nl) and 0 or 1)
-            if offset > 0 then
+            local pos = internal.pos + 1
+            local nl = internal.buffer:sub(pos, -1):find("\n")
+            local out = internal.buffer:sub(pos, pos + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
+            local offset = #out + (withTrailing and 0 or 1)
+            if internal.pos <= #internal.buffer then
                 internal.pos = internal.pos + offset
                 return out
             end
@@ -471,7 +587,7 @@ local function initfs(request, syncData)
             assert(not internal.closed, "attempt to use a closed file")
             local pos = internal.pos
             local out = internal.buffer:sub(pos, -1)
-            if #out > 0 then
+            if internal.pos < #internal.buffer then
                 internal.pos = internal.pos + #out
                 return out
             end
@@ -543,34 +659,7 @@ local function setup()
         if res and res.ok and res.type == "hello" then
             local syncData = res.data
 
-            local function request(data, timeout)
-                assert(data.type, "Missing request type")
-                ws.send(textutils.serializeJSON(data))
-                local reqres
-                parallel.waitForAny(function()
-                    sleep(timeout or 5)
-                end, function()
-                    while true do
-                        local _, wsurl, response = os.pullEventRaw("websocket_message")
-                        if wsurl == url and response then
-                            local json = unserializeJSON(response)
-                            if json.type == data.type then
-                                reqres = json
-                                return
-                            end
-                        end
-                    end
-                end)
-                if not reqres then
-                    return false, "Timeout"
-                elseif reqres.ok then
-                    return true, reqres.data
-                else
-                    return false, reqres.err
-                end
-            end
-
-            return true, ws.close, syncData, initfs(request, syncData)
+            return true, ws.close, syncData, initfs(ws, syncData)
         else
             ws.close()
             return false, "Failed to complete netmount handshake"

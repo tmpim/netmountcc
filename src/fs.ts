@@ -2,6 +2,9 @@ import pathlib from 'path';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
+import { v4 } from 'uuid';
+import { WriteStream, ReadStream } from './stream'
+import {WebSocket, RawData} from 'ws'
 
 let netpath: string;
 
@@ -19,7 +22,7 @@ function join(path: string) {
 }
 
 export interface AsyncFSFunction {
-    (data: Object): Promise<Object>;
+    (data: Object, ws: WebSocket): Promise<Object | undefined>;
 }
 
 export class Attributes {
@@ -114,7 +117,7 @@ export function watch(callback: WatcherCallback): () => void {
 
 export const methods: Map<string, AsyncFSFunction> = new Map()
 
-methods.set("move", async (data: any) => {
+methods.set("move", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
         try {
             fsp.cp(join(data.path), join(data.dest), {
@@ -143,7 +146,7 @@ methods.set("move", async (data: any) => {
         }
     }
 })
-methods.set("copy", async (data: any) => {
+methods.set("copy", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
         try {
             fsp.cp(join(data.path), join(data.dest), {
@@ -171,7 +174,7 @@ methods.set("copy", async (data: any) => {
         }
     }
 })
-methods.set("delete", async (data: any) => {
+methods.set("delete", async (data: any, ws: WebSocket) => {
     if (await getAttributes(data.path)) {
         fsp.rm(join(data.path), {
             recursive: true
@@ -189,7 +192,7 @@ methods.set("delete", async (data: any) => {
         }
     }
 })
-methods.set("makeDir", async (data: any) => {
+methods.set("makeDir", async (data: any, ws: WebSocket) => {
     await fsp.mkdir(join(data.path), { recursive: true });
     return {
         ok: true,
@@ -197,7 +200,7 @@ methods.set("makeDir", async (data: any) => {
         data: undefined
     }
 })
-methods.set("writeFile", async (data: any) => {
+methods.set("writeFile", async (data: any, ws: WebSocket) => {
     const attrs = await getAttributes(data.path)
     if (attrs) {
         if (attrs.isDir) {
@@ -214,16 +217,11 @@ methods.set("writeFile", async (data: any) => {
             }
         }
     }
-    const path = join(data.path)
-    await fsp.mkdir(pathlib.dirname(path), { recursive: true })
-    await fsp.writeFile(path, data.data)
-    return {
-        ok: true,
-        type: "writeFile",
-        data: undefined
-    }
+    new WriteStream(data.uuid, join(data.path), ws)
+    return undefined;
+    
 })
-methods.set("readFile", async (data: any) => {
+methods.set("readFile", async (data: any, ws: WebSocket) => {
     const attrs = await getAttributes(data.path)
     if (!attrs || (attrs && attrs.isDir)) {
         return {
@@ -232,11 +230,6 @@ methods.set("readFile", async (data: any) => {
             err: "/"+data.path+": No such file"
         }
     }
-    const path = join(data.path)
-    const readData = await fsp.readFile(path)
-    return {
-        ok: true,
-        type: "readFile",
-        data: readData.toString()
-    }
+    new ReadStream(join(data.path), ws)
+    return undefined;
 })

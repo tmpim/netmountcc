@@ -45,6 +45,7 @@ app.ws('/', async (ws, req) => {
         })
         // file system watcher
         const closeListener = watch(async (path: string, attributes: false | Attributes) => {
+            console.log("sync", path, req.ip)
             send({
                 ok: true,
                 type: "sync",
@@ -74,22 +75,25 @@ app.ws('/', async (ws, req) => {
                         ok: false,
                         err: "Missing request type"
                     })
+                    return
                 }
                 const method = methods.get(content.type)
                 if (method) {
                     debug("in: ", data)
                     let out;
                     try {
-                        out = await method(content)
-                    } catch(e) {
+                        out = await method(content, ws)
+                    } catch (e) {
                         out = {
                             ok: false,
                             err: e
                         }
                     }
                     debug("out: ", out)
-                    send(out)
-                } else if (content.type == "keepalive") {
+                    if (out) {
+                        send(out)
+                    }
+                } else if (content.type == "keepalive" || content.type == "readStream" || content.type == "writeStream") {
                     // no-op
                 } else {
                     send({
