@@ -3,7 +3,7 @@ import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
 
-let netpath = pathlib.join(__dirname, "../data")
+let netpath: string;
 
 const fileExists = async (path: string) => {
     try {
@@ -16,10 +16,6 @@ const fileExists = async (path: string) => {
 function join(path: string) {
     var safePath = pathlib.normalize(path).replace(/^(\.\.(\/|\\|$))+/, '');
     return pathlib.join(netpath, safePath)
-}
-
-export function setNetPath(path: string) {
-    netpath = path
 }
 
 export interface AsyncFSFunction {
@@ -89,7 +85,12 @@ async function run() {
     })
     
 }
-run()
+
+export function start(path: string) {
+    netpath = path
+    console.log(netpath)
+    run()
+}
 
 export function getContents(): Map<string, Attributes> {
     return contents
@@ -172,7 +173,9 @@ methods.set("copy", async (data: any) => {
 })
 methods.set("delete", async (data: any) => {
     if (await getAttributes(data.path)) {
-        fsp.rm(join(data.path))
+        fsp.rm(join(data.path), {
+            recursive: true
+        })
         return {
             ok: true,
             type: "delete",

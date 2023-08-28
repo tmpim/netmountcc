@@ -388,6 +388,7 @@ local function initfs(request, syncData)
             })
             if ok then
                 internal.buffer = data
+                internal.ibuffer = data
                 internal.pos = #data
             else
                 error(data)
@@ -405,13 +406,16 @@ local function initfs(request, syncData)
 
         handle.flush = function()
             assert(not internal.closed, "attempt to use a closed file")
-            local ok, data = request({
-                type = "writeFile",
-                path = path,
-                data = internal.buffer
-            })
-            if not ok then
-                error(data)
+            if internal.ibuffer ~= internal.buffer then
+                internal.ibuffer = internal.buffer
+                local ok, data = request({
+                    type = "writeFile",
+                    path = path,
+                    data = internal.buffer
+                })
+                if not ok then
+                    error(data)
+                end
             end
         end
 
@@ -624,12 +628,10 @@ if suc then
         term.setTextColor(colors.green)
         print(netroot)
         term.setTextColor(colors.white)
-        sleep(2)
         if #args > 0 then
             shell.run(table.unpack(args))
         else
             shell.run("shell")
-            os.pullEvent("key")
         end
     end
 
@@ -638,11 +640,11 @@ if suc then
     if type(wsclose) == "function" then
         wsclose()
     else
-        printError(wsclose)
+        printError("Websocket closed: "..(wsclose or "reason unknown"))
         print("Press any key to continue")
         os.pullEvent("key")
     end
     _G.fs = ofs
 else
-    printError("Setup failed.")
+    printError("Setup failed: "..(wsclose or "reason unknown"))
 end

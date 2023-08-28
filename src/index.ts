@@ -2,20 +2,18 @@ import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
-import { Attributes, methods, watch, getContents, getCapacity, setNetPath } from "./fs"
+import { Attributes, methods, watch, getContents, getCapacity, start } from "./fs"
 
 function debug(message?: any, ...optionalParams: any[]) {
     if (process.env.DEBUG) {
-        console.log(message, optionalParams)
+        console.log(message, ...optionalParams)
     }
 }
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
 
-if (process.env.MPATH) {
-    setNetPath(process.env.MPATH)
-}
+start(process.env.MPATH || path.join(__dirname, "../data"))
 
 const luaPath =  path.join(__dirname, "../public/mount.lua")
 app.get('/mount.lua', async (req, res) => {
@@ -34,18 +32,20 @@ app.ws('/', async (ws, req) => {
     const b64auth = (req.headers.authorization || '').split(' ')[1] || ''
     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':')
     if (login && password && login === process.env.USERNAME && password === process.env.PASSWORD) {
+        const send = (data: object) => ws.send(JSON.stringify(data, replacer))
+        debug("Connection established by ", req.ip)
         // hello message
-        ws.send(JSON.stringify({
+        send({
             ok: true,
             type: "hello",
             data: {
                 contents: getContents(),
                 capacity: await getCapacity()
             }
-        }, replacer))
+        })
         // file system watcher
         const closeListener = watch(async (path: string, attributes: false | Attributes) => {
-            ws.send(JSON.stringify({
+            send({
                 ok: true,
                 type: "sync",
                 data: {
@@ -53,44 +53,61 @@ app.ws('/', async (ws, req) => {
                     attributes,
                     capacity: await getCapacity()
                 }
-            }))
+            })
         })
         // heartbeat
-        setInterval(() => ws.ping(), 1000 * 20)
+        const beat = setInterval(() => {
+            ws.ping()
+            debug("ping!")
+        }, 1000 * 20)
+        if (process.env.DEBUG) {
+            ws.on("pong", () => {
+                console.log("pong!")
+            })
+        }
         // other message listener
         ws.on("message", async (data, binary) => {
             try {
                 let content = JSON.parse(data.toString());
                 if (!content.type) {
-                    ws.send(JSON.stringify({
+                    send({
                         ok: false,
                         err: "Missing request type"
-                    }))
+                    })
                 }
                 const method = methods.get(content.type)
                 if (method) {
                     debug("in: ", data)
-                    const out = JSON.stringify(await method(content))
+                    let out;
+                    try {
+                        out = await method(content)
+                    } catch(e) {
+                        out = {
+                            ok: false,
+                            err: e
+                        }
+                    }
                     debug("out: ", out)
-                    ws.send(out)
+                    send(out)
                 } else if (content.type == "keepalive") {
                     // no-op
                 } else {
-                    ws.send(JSON.stringify({
+                    send({
                         ok: false,
                         type: content.type,
                         err: "No such request type '" + content.type + "'"
-                    }))
+                    })
                 }
             } catch {
-                ws.send(JSON.stringify({
+                send({
                     ok: false,
                     err: "Invalid JSON syntax"
-                }))
+                })
             }
         })
         ws.on("close", (code, reason) => {
-            debug(code, reason)
+            debug(`Connection closed by ${req.ip}. ${code}: ${reason || "unknown"}`)
+            clearInterval(beat)
             closeListener()
         })
     } else {
