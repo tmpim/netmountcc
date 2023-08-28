@@ -8,36 +8,90 @@ do
     -- licensed under the terms of the LGPL2
 
     -- character table string
-    local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
+    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local yield = 1000000
     -- encoding
     function b64e(data)
+        local sum = 0
         return ((data:gsub('.', function(x)
             local r, c = '', x:byte()
             for i = 8, 1, -1 do r = r .. (c % 2 ^ i - c % 2 ^ (i - 1) > 0 and '1' or '0') end
+            sum = sum + 1
+            if sum > yield then
+                sleep()
+                sum = 0
+            end
             return r;
         end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
             if (#x < 6) then return '' end
             local c = 0
             for i = 1, 6 do c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0) end
+            sum = sum + 1
+            if sum > yield then
+                sleep()
+                sum = 0
+            end
             return b:sub(c + 1, c + 1)
         end) .. ({ '', '==', '=' })[#data % 3 + 1])
     end
 
     -- decoding
     function b64d(data)
-        data = string.gsub(data, '[^'..b..'=]', '')
+        local sum = 0
+        data = string.gsub(data, '[^' .. b .. '=]', '')
         return (data:gsub('.', function(x)
             if (x == '=') then return '' end
-            local r,f='',(b:find(x)-1)
-            for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+            local r, f = '', (b:find(x) - 1)
+            for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and '1' or '0') end
+            sum = sum + 1
+            if sum > yield then
+                sleep()
+                sum = 0
+            end
             return r;
         end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
             if (#x ~= 8) then return '' end
-            local c=0
-            for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+            local c = 0
+            for i = 1, 8 do c = c + (x:sub(i, i) == '1' and 2 ^ (8 - i) or 0) end
+            sum = sum + 1
+            if sum > yield then
+                sleep()
+                sum = 0
+            end
             return string.char(c)
         end))
+    end
+end
+
+local latinToUtf, utfToLatin
+do
+    local normal = {}
+    local toUtf = {}
+    local toLatin = {}
+    for i=0,127 do normal[string.char(i)] = true end
+    for i=128,191 do toUtf[string.char(i)] = "\194"..string.char(i) ; toLatin[string.char(i)] = string.char(i+64)  end
+    for i=192,255 do toUtf[string.char(i)] = "\195"..string.char(i-64) end
+
+    function latinToUtf(data)
+        return string.gsub(data,"[\128-\255]",toUtf)
+    end
+
+    local nMode = 0
+    local function processChar(a)
+        if normal[a] then nMode = 0 return a
+        elseif nMode == 0 then
+            if a == "\194" then nMode = 2 return ""
+            elseif a == "\195" then nMode = 3 return ""
+            end
+        elseif nMode == 2 then nMode = 0 return a
+        elseif nMode == 3 then nMode = 0 return toLatin[a]
+        end
+        return "?"
+    end
+
+    function utfToLatin(data)
+        nMode = 0
+        return string.gsub(data,".",processChar)
     end
 end
 
@@ -136,9 +190,9 @@ local function initfs(ws, syncData)
             path = path
         })
         if not ok then
-            error(data)
+            return false, data
         elseif not data.uuid then
-            error("Missing stream UUID")
+            return false, "Missing stream UUID"
         else
             local combined = ""
             local chunk = 0
@@ -191,9 +245,6 @@ local function initfs(ws, syncData)
 
     local function writeStream(path, contents)
         contents = b64e(contents)
-        local f = ofs.open("debug.txt", "w")
-        f.write(contents)
-        f.close()
         local uuid = v4()
         local ok, data = request({
             ok = true,
@@ -551,7 +602,8 @@ local function initfs(ws, syncData)
             assert(not internal.closed, "attempt to use a closed file")
             if internal.ibuffer ~= internal.buffer then
                 internal.ibuffer = internal.buffer
-                local ok, data = writeStream(path, internal.buffer:gsub("\n$", ""))
+                local out = internal.buffer:gsub("\n$", "")
+                local ok, data = writeStream(path, binary and out or latinToUtf(out))
                 if not ok then
                     error("Write stream error: "..data)
                 end
@@ -577,7 +629,7 @@ local function initfs(ws, syncData)
         local handle, internal = genericHandle(path, binary)
         local ok, data = readStream(path)
         if ok then
-            internal.buffer = data
+            internal.buffer = binary and data or utfToLatin(data)
         else
             error("Read stream error: "..data)
         end
@@ -585,7 +637,7 @@ local function initfs(ws, syncData)
         handle.read = function(count)
             assert(not internal.closed, "attempt to use a closed file")
             local out = internal.buffer:sub(internal.pos+1, internal.pos+count)
-            if internal.pos <= #internal.buffer then
+            if internal.pos < #internal.buffer then
                 internal.pos = internal.pos + #out
                 return out
             end

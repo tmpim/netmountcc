@@ -26,7 +26,7 @@ class Stream {
 export class ReadStream extends Stream {
 
     async run() {
-        const data = btoa(await fsp.readFile(this.path, { encoding: 'binary'}))
+        const data = await fsp.readFile(this.path, { encoding: 'base64'})
         const listener = (rawdata: RawData, binary: boolean) => {
             const res = JSON.parse(rawdata.toString())
             if (res.type == "readStream" && res.uuid == this.uuid) {
@@ -35,7 +35,6 @@ export class ReadStream extends Stream {
         }
         const send = (chunk: number) => {
             const subchunk = data?.substring(chunkSize * chunk, (chunkSize * (chunk + 1)) + 1)
-            debug(subchunk)
             if (subchunk.length > 0) {
                 this.ws.send(JSON.stringify({
                     ok: true,
