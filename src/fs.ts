@@ -216,7 +216,7 @@ methods.set("writeFile", async (data: any, ws: WebSocket) => {
             }
         }
     }
-    new WriteStream(data.uuid, join(data.path), ws)
+    new WriteStream(data.uuid, join(data.path), data.chunks, ws)
     return undefined;
     
 })

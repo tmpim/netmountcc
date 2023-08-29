@@ -9,12 +9,78 @@ function debug(message?: any, ...optionalParams: any[]) {
     }
 }
 
+// Safely below the max socket send limit, and divisible by 3 so base64 encoding leaves no trailing padding
 const chunkSize = Math.pow(2, 16);
+const encoder = new TextEncoder()
+const decoder = new TextDecoder("latin1")
 
 class Stream {
     readonly uuid: string;
     protected readonly path: string;
     protected readonly ws: WebSocket;
+
+    protected serialize(id: 0, chunk: number, data: string): string
+    protected serialize(id: 1, chunk: number): string
+    protected serialize(id: 2, chunk: number): string
+    protected serialize(id: 3, reason: string): string
+    protected serialize(id: number, ...args: any[]): string {
+        let out = id.toString() + " " + this.uuid
+        args.forEach((str) => out += " " + str)
+        return out;
+    }
+
+    protected unserialize(data: string) {
+        const header = (/^([0123]) ([0-9a-fA-F-]+) /sm).exec(data)
+        if (!header || header?.length < 2 || header[2] != this.uuid) {
+            return undefined
+        }
+        let values;
+        switch (header[1]) {
+            case '0':
+                values = (/^([0123]) ([0-9a-fA-F-]+) (\d+) (.*)$/sm).exec(data)
+                if (values) {
+                    return {
+                        uuid: header[2],
+                        chunk: Number(values[3]),
+                        data: values[4]
+                    }
+                } else {
+                    return undefined
+                }
+            case '1':
+                values = (/(\d+)$/sm).exec(data)
+                if (values) {
+                    return {
+                        uuid: header[2],
+                        chunk: Number(values[1])
+                    }
+                } else {
+                    return undefined
+                }
+            case '2':
+                values = (/(\d+)$/sm).exec(data)
+                if (values) {
+                    return {
+                        uuid: header[2],
+                        chunk: Number(values[1]),
+                        success: true
+                    }
+                } else {
+                    return undefined
+                }
+            case '3':
+                values = (/(.*)$/sm).exec(data)
+                if (values) {
+                    return {
+                        uuid: header[2],
+                        err: values[1]
+                    }
+                } else {
+                    return undefined
+                }
+        }
+        return undefined;
+    }
 
     constructor(uuid: string, path: string, ws: WebSocket) {
         this.uuid = uuid
@@ -26,79 +92,75 @@ class Stream {
 export class ReadStream extends Stream {
 
     async run() {
-        const data = await fsp.readFile(this.path, { encoding: 'base64'})
-        const listener = (rawdata: RawData, binary: boolean) => {
-            const res = JSON.parse(rawdata.toString())
-            if (res.type == "readStream" && res.uuid == this.uuid) {
-                send(res.chunk)
-            }
-        }
-        const send = (chunk: number) => {
-            const subchunk = data?.substring(chunkSize * chunk, (chunkSize * (chunk + 1)))
-            if (subchunk.length > 0) {
-                this.ws.send(JSON.stringify({
-                    ok: true,
-                    type: "readStream",
-                    uuid: this.uuid,
-                    data: subchunk,
-                    chunk
-                }))
-                debug(`sent chunk ${chunk}`)
-            } else {
-                this.ws.send(JSON.stringify({
-                    ok: true,
-                    type: "readStream",
-                    uuid: this.uuid,
-                    complete: true
-                }))
-                debug(`sending complete`)
-                this.ws.removeListener("message", listener)
-            }
-        }
-        this.ws.on("message", listener)
-        send(0)
-    }
+        const data = Buffer.from(await fsp.readFile(this.path, { encoding: 'binary' }), "binary")
+        const chunkTotal = Math.ceil(data.length/chunkSize)
+        let total = 0;
 
-    constructor(path: string, ws: WebSocket) {
-        super(v4(), path, ws)
         this.ws.send(JSON.stringify({
             ok: true,
             type: "readFile",
             data: {
-                uuid: this.uuid
+                uuid: this.uuid,
+                chunks: chunkTotal
             }
         }))
+
+        const listener = (rawdata: RawData, binary: boolean) => {
+            const res = this.unserialize(rawdata.toString())
+            if (res && res.uuid == this.uuid && res.chunk != undefined) {
+                if (res.success) {
+                    total++;
+                    if (total == chunkTotal) {
+                        debug(`sending complete`)
+                        this.ws.removeListener("message", listener)
+                    }
+                    return
+                }
+                const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1)))
+                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk.toString("binary")), "binary"), {binary: true})
+                debug(`sent chunk ${res.chunk}`)
+            }
+        }
+
+        this.ws.on("message", listener)
+    }
+
+    constructor(path: string, ws: WebSocket) {
+        super(v4(), path, ws)
         this.run()
     }
 }
 
 export class WriteStream extends Stream {
+    protected readonly chunkTotal: number;
 
     async run() {
-        let data = "";
+        let chunks: Buffer[] = [];
+        let total = 0;
         const listener = async (wsdata: RawData, binary: boolean) => {
-            const res = JSON.parse(wsdata.toString())
-            if (res.type == "writeStream" && res.uuid == this.uuid && res.chunk >= 0) {
+            const res = this.unserialize(wsdata.toString())
+            if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
                 debug(`got chunk ${res.chunk}`)
-                data += res.data
-                this.ws.send(JSON.stringify({
-                    ok: true,
-                    type: res.type,
-                    uuid: this.uuid,
-                    chunk: res.chunk+1
-                }))
-            } else if (res.complete) {
+                chunks[res.chunk] = Buffer.from(res.data, 'binary')
+                total++;
+                this.ws.send(this.serialize(2, res.chunk), {binary: true})
+            }
+            if (total == this.chunkTotal) {
                 this.ws.removeListener("message", listener)
                 debug(`saving chunks`)
                 await fsp.mkdir(pathlib.dirname(this.path), { recursive: true })
-                await fsp.writeFile(this.path, data, { encoding: 'base64'})
+                await fsp.writeFile(this.path, chunks, { encoding: 'binary'})
             }
         }
         this.ws.on("message", listener)
+        for (let chunk = 0; chunk < this.chunkTotal; chunk++) {
+            this.ws.send(this.serialize(1, chunk), {binary: true})
+        }
     }
 
-    constructor(uuid: string, path: string, ws: WebSocket) {
+    constructor(uuid: string, path: string, chunks: number, ws: WebSocket) {
         super(uuid, path, ws)
+        this.chunkTotal = chunks
         this.ws.send(JSON.stringify({
             ok: true,
             type: "writeFile",

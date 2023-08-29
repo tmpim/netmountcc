@@ -93,8 +93,6 @@ app.ws('/', async (ws, req) => {
                     if (out) {
                         send(out)
                     }
-                } else if (content.type == "keepalive" || content.type == "readStream" || content.type == "writeStream") {
-                    // no-op
                 } else {
                     send({
                         ok: false,
@@ -103,10 +101,11 @@ app.ws('/', async (ws, req) => {
                     })
                 }
             } catch {
-                send({
+                // Could be a read/write stream thing.
+                /*send({
                     ok: false,
                     err: "Invalid JSON syntax"
-                })
+                })*/
             }
         })
         ws.on("close", (code, reason) => {

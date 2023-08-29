@@ -1,65 +1,37 @@
 local ofs = _G.fs
 
--- [[ Simple base64 Encoder ]] --
-
-local b64e, b64d
+-- [[ Utility functions ]] --
+local b64e
 do
     -- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
     -- licensed under the terms of the LGPL2
 
     -- character table string
     local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    local yield = 1000000
     -- encoding
     function b64e(data)
+        local yield = 50000
         local sum = 0
         return ((data:gsub('.', function(x)
             local r, c = '', x:byte()
-            for i = 8, 1, -1 do r = r .. (c % 2 ^ i - c % 2 ^ (i - 1) > 0 and '1' or '0') end
             sum = sum + 1
             if sum > yield then
                 sleep()
                 sum = 0
             end
+            for i = 8, 1, -1 do r = r .. (c % 2 ^ i - c % 2 ^ (i - 1) > 0 and '1' or '0') end
             return r;
         end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
             if (#x < 6) then return '' end
             local c = 0
-            for i = 1, 6 do c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0) end
             sum = sum + 1
             if sum > yield then
                 sleep()
                 sum = 0
             end
+            for i = 1, 6 do c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0) end
             return b:sub(c + 1, c + 1)
         end) .. ({ '', '==', '=' })[#data % 3 + 1])
-    end
-
-    -- decoding
-    function b64d(data)
-        local sum = 0
-        data = string.gsub(data, '[^' .. b .. '=]', '')
-        return (data:gsub('.', function(x)
-            if (x == '=') then return '' end
-            local r, f = '', (b:find(x) - 1)
-            for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and '1' or '0') end
-            sum = sum + 1
-            if sum > yield then
-                sleep()
-                sum = 0
-            end
-            return r;
-        end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-            if (#x ~= 8) then return '' end
-            local c = 0
-            for i = 1, 8 do c = c + (x:sub(i, i) == '1' and 2 ^ (8 - i) or 0) end
-            sum = sum + 1
-            if sum > yield then
-                sleep()
-                sum = 0
-            end
-            return string.char(c)
-        end))
     end
 end
 
@@ -95,8 +67,93 @@ do
     end
 end
 
--- [[ Argument Parsing ]] --
+local v4
+do
+    local dashes = {
+        [8] = true,
+        [12] = true,
+        [16] = true,
+        [20] = true
+    }
+    function v4()
+        local out = {}
+        for i = 1, 32 do
+            local val = math.random(0, 15)
+            if val < 10 then
+                out[#out + 1] = val
+            else
+                out[#out + 1] = string.char(val + 87)
+            end
+            if dashes[i] then
+                out[#out + 1] = "-"
+            end
+        end
+        return table.concat(out, "")
+    end
+end
 
+local unserializeJSON, unserializeStream
+do
+    local patterns = {
+        "^[0] ([0-9a-fA-F-]+) (%d+) (.*)$",
+        "^[1] ([0-9a-fA-F-]+) (%d+)$",
+        "^[2] ([0-9a-fA-F-]+) (%d+)$",
+        "^[3] ([0-9a-fA-F-]+) (.*)$"
+    }
+
+    function unserializeStream(str)
+        local out
+        -- 0 uuid chunk# [data] - Transmit data
+        -- 1 uuid chunk# - Request chunk
+        -- 2 uuid chunk# - Flag chunk as received
+        -- 3 uuid reason - Close stream
+        local method = tonumber(str:sub(1, 1))
+        if method == 0 then
+            str:gsub(patterns[1], function(uuid, chunk, data)
+                out = {
+                    uuid = uuid,
+                    chunk = tonumber(chunk),
+                    data = data,
+                }
+            end)
+        elseif method == 1 then
+            str:gsub(patterns[2], function(uuid, chunk)
+                out = {
+                    uuid = uuid,
+                    chunk = tonumber(chunk)
+                }
+            end)
+        elseif method == 2 then
+            str:gsub(patterns[3], function(uuid, chunk)
+                out = {
+                    uuid = uuid,
+                    chunk = tonumber(chunk),
+                    success = true
+                }
+            end)
+        elseif method == 3 then
+            str:gsub(patterns[4], function(uuid, reason)
+                out = {
+                    ok = #reason == 0,
+                    uuid = uuid,
+                    err = reason
+                }
+            end)
+        end
+        if out and out.uuid then
+            return out
+        end
+    end
+
+    function unserializeJSON(str)
+        local ok, data = pcall(textutils.unserialiseJSON, str)
+        if ok then
+            return data
+        end
+    end
+end
+
+-- [[ Argument Parsing ]] --
 local args = table.pack(...)
 
 local url, auth
@@ -128,15 +185,6 @@ end
 local netroot = table.remove(args, 1) or "net"
 assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
 
--- [[ Local helper, and future override functions ]] --
-
-local function unserializeJSON(str)
-    local ok, data = pcall(textutils.unserialiseJSON, str)
-    if ok then
-        return data
-    end
-end
-
 local function toNetRoot(path)
     path = ofs.combine(path)
     local nreplaced
@@ -151,8 +199,7 @@ local function toNetRoot(path)
 end
 
 -- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
-
-local chunkSize = 2^16
+local chunkSize, chunkTimeout = 2^16, 3600*20*10
 
 local function initfs(ws, syncData)
 
@@ -183,6 +230,53 @@ local function initfs(ws, syncData)
         end
     end
 
+    local function handleStream(chunks, totalChunks, func)
+        local threads = {}
+        local lastChunk, attempts = os.epoch(), 0
+        -- 3 request attempts, retries if no chunks are sent in a 5 seconds interval
+        while #chunks < totalChunks and attempts < 3 do
+            for chunk = 0, totalChunks - 1 do
+                threads[chunk + 1] = function()
+                    while not chunks[chunk + 1] do
+                        func(chunk)
+                    end
+                    lastChunk = os.epoch()
+                end
+            end
+
+            attempts = attempts + 1
+
+            parallel.waitForAny(function()
+                while os.epoch() < lastChunk + chunkTimeout do
+                    sleep(1)
+                end
+                lastChunk = os.epoch()
+            end, function()
+                parallel.waitForAll(table.unpack(threads))
+            end)
+        end
+
+        if attempts == 3 then
+            return false, "Chunk request attempt limit reached"
+        else
+            return true
+        end
+    end
+
+    local function streamListen(uuid, chunk, func)
+        while true do
+            local e, wsurl, rawdata = os.pullEventRaw()
+            if e == "websocket_message" and wsurl == url then
+                local response = unserializeStream(rawdata)
+                if response and response.uuid == uuid and response.chunk == chunk then
+                    return true, func(response)
+                end
+            elseif e == "websocket_close" and wsurl == url then
+                return false, "Websocket Closed"
+            end
+        end
+    end
+
     local function readStream(path)
         local ok, data = request({
             ok = true,
@@ -193,97 +287,55 @@ local function initfs(ws, syncData)
             return false, data
         elseif not data.uuid then
             return false, "Missing stream UUID"
+        elseif not data.chunks then
+            return false, "Missing chunk totals"
         else
-            local combined = ""
-            local chunk = 0
-            while true do
-                local e, wsurl, rawdata = os.pullEventRaw()
-                local response = unserializeJSON(rawdata)
-                local matches = (wsurl == url and response and response.type == "readStream" and response.uuid == data.uuid)
-                if e == "websocket_message" and matches and response.chunk == chunk then
-                    combined = combined .. response.data
-                    chunk = chunk + 1
-                    ws.send(textutils.serializeJSON({
-                        ok = true,
-                        type = "readStream",
-                        uuid = data.uuid,
-                        chunk = chunk
-                    }))
-                elseif e == "websocket_message" and matches and response.complete then
-                    return true, b64d(combined)
-                elseif e == "websocket_close" and wsurl == url then
-                    return false, "Websocket Closed"
-                end
+            local chunks = {}
+            local suc, err = handleStream(chunks, data.chunks, function(chunk)
+                local header = " " .. data.uuid .. " " .. chunk
+                ws.send("1" .. header, true)
+                streamListen(data.uuid, chunk, function(response)
+                    chunks[chunk + 1] = response.data
+                    ws.send("2" .. header, true)
+                    lastChunk = os.epoch()
+                end)
+            end)
+            if suc then
+                return true, table.concat(chunks)
+            else
+                error("Read stream error: "..(err or "Reason unknown"))
             end
-        end
-    end
-
-    local v4
-    do
-        local dashes = {
-            [8] = true,
-            [12] = true,
-            [16] = true,
-            [20] = true
-        }
-        function v4()
-            local out = {}
-            for i = 1, 32 do
-                local val = math.random(0, 15)
-                if val < 10 then
-                    out[#out + 1] = val
-                else
-                    out[#out + 1] = string.char(val + 87)
-                end
-                if dashes[i] then
-                    out[#out + 1] = "-"
-                end
-            end
-            return table.concat(out, "")
         end
     end
 
     local function writeStream(path, contents)
-        contents = b64e(contents)
         local uuid = v4()
+        local totalChunks = math.max(math.ceil(#contents/chunkSize), 1)
         local ok, data = request({
             ok = true,
             type = "writeFile",
             path = path,
-            uuid = uuid
+            uuid = uuid,
+            chunks = totalChunks
         })
-        local function send(chunk)
-            local subchunk = contents:sub(chunkSize * chunk, chunkSize * (chunk + 1))
-            if #subchunk > 0 then
-                ws.send(textutils.serializeJSON({
-                    ok = true,
-                    type = "writeStream",
-                    uuid = uuid,
-                    chunk = chunk,
-                    data = subchunk
-                }))
-            else
-                ws.send(textutils.serializeJSON({
-                    ok = true,
-                    type = "writeStream",
-                    uuid = uuid,
-                    complete = true
-                }))
-                return true
-            end
-        end
-        send(0)
-        while true do
-            local e, wsurl, rawdata = os.pullEventRaw()
-            local response = unserializeJSON(rawdata)
-            local matches = (wsurl == url and response and response.type == "writeStream" and response.uuid == data.uuid)
-            if e == "websocket_message" and matches and response.chunk then
-                if send(response.chunk) then
-                    return true
-                end
-            elseif e == "websocket_close" and wsurl == url then
-                return false, "Websocket Closed"
-            end
+        local chunks = {}
+        local suc, err = handleStream(chunks, totalChunks, function(chunk)
+            streamListen(uuid, chunk, function(res)
+                local schunk = contents:sub((chunkSize * chunk)+1, (chunkSize * (chunk + 1)))
+                ws.send(table.concat({"0", uuid, chunk, schunk}, " "), true)
+                streamListen(uuid, chunk, function(response)
+                    if response.success then
+                        chunks[chunk+1] = true
+                    end
+                end)
+            end)
+        end)
+        if suc then
+            return true
+        else
+            err = (err or "Reason unknown")
+            ws.send("3 "..uuid.." "..err, true)
+            error("Write stream error: "..err)
         end
     end
 
@@ -306,7 +358,6 @@ local function initfs(ws, syncData)
     end
 
     -- [[ Functions that can be directly ripped from old fs API ]] --
-
     local copyold = {
         "combine",
         "getName",
@@ -603,7 +654,7 @@ local function initfs(ws, syncData)
                 local out = internal.buffer:gsub("\n$", "")
                 local ok, data = writeStream(path, binary and out or latinToUtf(out))
                 if not ok then
-                    error("Write stream error: "..data)
+                    error("Write stream error: "..(data or "Unknown"))
                 end
             end
         end
@@ -757,7 +808,7 @@ if suc then
             local _, wsurl, sres = os.pullEventRaw("websocket_message")
             if wsurl == url and sres then
                 local json = unserializeJSON(sres)
-                if json.type == "sync" and json.data and syncData then
+                if json and json.type == "sync" and json.data and syncData then
                     syncData.contents[json.data.path] = json.data.attributes or nil
                 end
             end
@@ -795,11 +846,17 @@ if suc then
     end
 
     _G.fs = fs
-    parallel.waitForAny(sync, subshell, close)
-    if type(wsclose) == "function" then
-        wsclose()
+    local ok, err = pcall(parallel.waitForAny, sync, subshell, close)
+    if ok then
+        if type(wsclose) == "function" then
+            wsclose()
+        else
+            printError("Websocket closed: "..(wsclose or "reason unknown"))
+            print("Press any key to continue")
+            os.pullEvent("key")
+        end
     else
-        printError("Websocket closed: "..(wsclose or "reason unknown"))
+        printError(err)
         print("Press any key to continue")
         os.pullEvent("key")
     end
