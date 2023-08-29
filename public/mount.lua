@@ -772,20 +772,34 @@ end
 
 local function setup()
     http.websocketAsync(url, auth)
-    local eventData = { os.pullEventRaw() }
-    local event = eventData[1]
-    if event == "websocket_success" and eventData[2] == url then
-        local ws = eventData[3]
-        local res = unserializeJSON(ws.receive(5))
-        if res and res.ok and res.type == "hello" then
-            local syncData = res.data
+    local out
+    parallel.waitForAny(function()
+        while true do
+            local eventData = { os.pullEventRaw() }
+            local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
+            if event == "websocket_success" and wsurl == url then
+                local ws = eventData[1]
+                local res = unserializeJSON(ws.receive(5))
+                if res and res.ok and res.type == "hello" then
+                    local syncData = res.data
 
-            return true, ws.close, syncData, initfs(ws, syncData)
-        else
-            ws.close()
-            return false, "Failed to complete netmount handshake"
+                    out = { true, ws.close, syncData, initfs(ws, syncData) }
+                    return
+                else
+                    ws.close()
+                    out = { false, "Failed to complete netmount handshake" }
+                    return
+                end
+            elseif event == "websocket_closed" and wsurl == url then
+                out = { false, "Closed: "..(eventData[2] or "unknown code") .. ": " .. (eventData[1] or "unknown reason") }
+            elseif event == "websocket_failure" and wsurl == url then
+                out = { false, "Failed: "..(eventData[1] or "unknown reason") }
+            end
         end
-    end
+    end, function()
+        sleep(5)
+    end)
+    return table.unpack(out)
 end
 
 local suc, wsclose, syncData, fs = setup()
@@ -862,5 +876,5 @@ if suc then
     end
     _G.fs = ofs
 else
-    printError("Setup failed: "..(wsclose or "reason unknown"))
+    printError("Setup "..(wsclose or "reason unknown"))
 end
