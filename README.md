@@ -24,16 +24,13 @@ where:
 - `path` - the chosen path the netmount will be located
 For information on setting up a username and password, see [Production Setup](#production-setup)
 
-## Workspace Setup
+## Configuration
 
-To install required packages:
-```sh
-$ yarn
-```
+Configuration is done with a `.env` file, and if using multi-user setups, with an additional JSON file.
 
 ### .env File
 
-Create a `.env` file:
+The bare minimum required to get a single user setup working:
 ```env
 USERNAME=username
 PASSWORD=password
@@ -42,9 +39,45 @@ where `username` and `password` are your choice of credentials.
 
 Optional valid env values include:
  - `MPATH`: The path that the netmount should serve to/from
+ - `USERLIST`: The path that the netmount should use to get multi-user information & configuration
  - `PORT`: The port on which netmount should operate on
 
-Run:
+### JSON File
+
+Supply a path to the JSON file using the `USERLIST` variable in the `.env` file. Remove `USERNAME` and `PASSWORD` values if they're present. 
+They will be added to the json file like so:
+```json5
+{
+    "config": { // Global config. This object is optional
+        "limit": 1000000, // 1 MB global limit
+        "path": "./custom/path" // Custom path to global data
+    },
+    "users": [ 
+        {
+            "username": "username",
+            "password": "password",
+            "config": { // Per-user config. This object is optional
+                "limit": 10000000, // 10 MB limit for this user
+                "path": "./mypath" // By default all user data will be stored in a folder using the username in the default/global path. This changes that behavior.
+            }
+        },
+        {
+            "username": "foobarbat",
+            "password": "verysecurepassword", // Due to netmount using basic http auth, please use a secure and long password!
+        }
+
+    ]
+}
+```
+
+## Workspace Setup
+
+To install required packages:
+```sh
+$ yarn
+```
+
+Then run:
 ```sh
 $ yarn run ts-node src/index.ts
 ```

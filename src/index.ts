@@ -2,7 +2,8 @@ import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
-import { Attributes, methods, watch, getContents, getCapacity, start } from "./fs"
+import { Attributes, NetFS } from "./fs"
+import { single, multi, UserList } from './userlist';
 
 function debug(message?: any, ...optionalParams: any[]) {
     if (process.env.DEBUG) {
@@ -12,8 +13,6 @@ function debug(message?: any, ...optionalParams: any[]) {
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
-
-start(process.env.MPATH || path.join(__dirname, "../data"))
 
 const luaPath =  path.join(__dirname, "../public/mount.lua")
 app.get('/mount.lua', async (req, res) => {
@@ -28,34 +27,50 @@ function replacer(key: any, value: any) {
     }
 }
 
+let userlist: UserList;
+if (process.env.USERNAME && process.env.PASSWORD) {
+    single(process.env.USERNAME, process.env.PASSWORD).then((ulist) => {
+        userlist = ulist
+    })
+} else if (process.env.USERLIST) {
+    multi(process.env.USERLIST).then((ulist) => {
+        userlist = ulist
+    })
+}
+
 app.ws('/', async (ws, req) => {
-    const b64auth = (req.headers.authorization || '').split(' ')[1] || ''
-    const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':')
-    if (login && password && login === process.env.USERNAME && password === process.env.PASSWORD) {
+    const user = userlist.authenticate(req.headers.authorization)
+    if (user) {
+        const fs = new NetFS(user, ws)
         const send = (data: object) => ws.send(JSON.stringify(data, replacer))
+        let closeListener: () => void;
         debug("Connection established by ", req.ip)
-        // hello message
-        send({
-            ok: true,
-            type: "hello",
-            data: {
-                contents: getContents(),
-                capacity: await getCapacity()
-            }
-        })
-        // file system watcher
-        const closeListener = watch(async (path: string, attributes: false | Attributes) => {
-            console.log("sync", path, req.ip)
+        fs.run(async () => {
+            // hello message
             send({
                 ok: true,
-                type: "sync",
+                type: "hello",
                 data: {
-                    path,
-                    attributes,
-                    capacity: await getCapacity()
+                    contents: fs.getContents(),
+                    capacity: await fs.getCapacity()
                 }
             })
+
+            // file system watcher
+            closeListener = fs.watch(async (path: string, attributes: false | Attributes) => {
+                debug("sync", path, req.ip)
+                send({
+                    ok: true,
+                    type: "sync",
+                    data: {
+                        path,
+                        attributes,
+                        capacity: await fs.getCapacity()
+                    }
+                })
+            })
         })
+        
         // heartbeat
         const beat = setInterval(() => {
             ws.ping()
@@ -77,12 +92,12 @@ app.ws('/', async (ws, req) => {
                     })
                     return
                 }
-                const method = methods.get(content.type)
+                const method = fs.methods.get(content.type)
                 if (method) {
                     debug("in: ", data)
                     let out;
                     try {
-                        out = await method(content, ws)
+                        out = await method(content)
                     } catch (e) {
                         out = {
                             ok: false,
@@ -101,11 +116,7 @@ app.ws('/', async (ws, req) => {
                     })
                 }
             } catch {
-                // Could be a read/write stream thing.
-                /*send({
-                    ok: false,
-                    err: "Invalid JSON syntax"
-                })*/
+                // Could be a read/write stream blob. Just ignore.
             }
         })
         ws.on("close", (code, reason) => {

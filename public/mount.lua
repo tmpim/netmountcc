@@ -238,7 +238,10 @@ local function initfs(ws, syncData)
             for chunk = 0, totalChunks - 1 do
                 threads[chunk + 1] = function()
                     while not chunks[chunk + 1] do
-                        func(chunk)
+                        local s, e = func(chunk)
+                        if not s then
+                            return s, e
+                        end
                     end
                     lastChunk = os.epoch()
                 end
@@ -269,7 +272,7 @@ local function initfs(ws, syncData)
             if e == "websocket_message" and wsurl == url then
                 local response = unserializeStream(rawdata)
                 if response and response.uuid == uuid and response.chunk == chunk then
-                    return true, func(response)
+                    return func(response)
                 end
             elseif e == "websocket_close" and wsurl == url then
                 return false, "Websocket Closed"
@@ -299,6 +302,7 @@ local function initfs(ws, syncData)
                     ws.send("2" .. header, true)
                     lastChunk = os.epoch()
                 end)
+                return true
             end)
             if suc then
                 return true, table.concat(chunks)
@@ -325,13 +329,19 @@ local function initfs(ws, syncData)
                 ws.send(table.concat({"0", uuid, chunk, schunk}, " "), true)
                 streamListen(uuid, chunk, function(response)
                     if response.success then
-                        chunks[chunk+1] = true
+                        chunks[chunk + 1] = true
+                        return true
+                    elseif response.err then
+                        return false, response.err
                     end
                 end)
             end)
+            return true
         end)
         if suc then
-            return true
+            return streamListen(uuid, nil, function(response)
+                return response.ok, response.err
+            end)
         else
             err = (err or "Reason unknown")
             ws.send("3 "..uuid.." "..err, true)
@@ -782,7 +792,6 @@ local function setup()
                 local res = unserializeJSON(ws.receive(5))
                 if res and res.ok and res.type == "hello" then
                     local syncData = res.data
-
                     out = { true, ws.close, syncData, initfs(ws, syncData) }
                     return
                 else
@@ -824,6 +833,7 @@ if suc then
                 local json = unserializeJSON(sres)
                 if json and json.type == "sync" and json.data and syncData then
                     syncData.contents[json.data.path] = json.data.attributes or nil
+                    syncData.capacity = json.data.capacity
                 end
             end
         end
