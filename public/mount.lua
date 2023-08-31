@@ -1,4 +1,4 @@
-local ofs = _G.fs
+local ofs = assert(_G.fs, "-eh?")
 
 -- [[ Utility functions ]] --
 local b64e

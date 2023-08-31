@@ -3,8 +3,11 @@ import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
 import chokidar from 'chokidar'
+import { v2 as webdav } from 'webdav-server'
 import { Attributes, NetFS } from "./fs"
-import { single, multi, UserList } from './userlist';
+import { UserList, Config } from './userlist';
+import { UserListStorageManager } from './webdav'
+import { FileSystem, FileSystemSerializer, PhysicalFileSystem } from 'webdav-server/lib/index.v2';
 
 function debug(message?: any, ...optionalParams: any[]) {
     if (process.env.DEBUG) {
@@ -28,25 +31,33 @@ function replacer(key: any, value: any) {
     }
 }
 
-let userlist: UserList;
+let userlist: UserList = new UserList();
 if (process.env.USERNAME && process.env.PASSWORD) {
-    single(process.env.USERNAME, process.env.PASSWORD).then((ulist) => {
-        userlist = ulist
-    })
+    userlist.addUser(process.env.USERNAME, process.env.PASSWORD, new Config(undefined, process.env.PATH || path.join(__dirname, "../data")))
 } else if (process.env.USERLIST) {
     let path: string = process.env.USERLIST;
-    multi(path).then((ulist) => {
-        userlist = ulist
-    })
     chokidar.watch(path).on("change", async () => {
         try {
-            userlist = await multi(path)
+            userlist.fromJSON(path)
         } catch (e) {
             console.log(e)
         }
     })
 }
 
+//userlist.privelegeManager.setRights(user, '/', [ 'all' ]);
+const server = new webdav.WebDAVServer({
+    serverName: "netmount",
+    requireAuthentification: true,
+    httpAuthentication: new webdav.HTTPBasicAuthentication(userlist.usermanager, "netmount"),
+    privilegeManager: userlist.privelegeManager,
+    storageManager: new UserListStorageManager(userlist),
+    rootFileSystem: new PhysicalFileSystem("/run/media/blargle/Cache/switchcraft/data/")
+})
+
+server.afterRequest(() => {
+    debug("here")
+})
 
 app.ws('/', async (ws, req) => {
     const user = userlist.authenticate(req.headers.authorization)
@@ -136,7 +147,12 @@ app.ws('/', async (ws, req) => {
     }
 })
 
-const port = process.env.PORT || 4000;
+const port = process.env.PORT ? parseInt(process.env.PORT) : 4000;
 app.listen(port, () => {
     console.log("Netmount started on port " + port)
+})
+
+const davport = process.env.WEBDAVPORT ? parseInt(process.env.WEBDAVPORT) : 4100
+server.start(davport, () => {
+    console.log("Netmount WebDAV started on port " + davport)
 })

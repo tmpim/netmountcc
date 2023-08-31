@@ -1,5 +1,6 @@
 import pathlib from 'path';
 import fsp from 'fs/promises';
+import { IUser, SimpleUserManager, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
 
 export class Config {
     readonly limit!: number
@@ -23,16 +24,13 @@ export class User {
     readonly username: string;
     readonly password: string;
     readonly config: Config;
-    globalConfig: Config | undefined;
+    globalConfig: Config;
+    readonly davuser: IUser
 
-    static restore (value: any) {
+    static restore (userlist: UserList, value: any) {
         if (value.username && value.password) {
-            return new User(value.username, value.password, Config.restore(value.config))
+            return new User(userlist, value.username, value.password, Config.restore(value.config))
         }
-    }
-
-    setGlobalConfig(config: Config) {
-        this.globalConfig = config;
     }
 
     authenticate(username: string, password: string) {
@@ -54,27 +52,36 @@ export class User {
         if (this.globalConfig?.limit) return this.globalConfig.limit
     }
 
-    constructor(username: string, password: string, config?: Config) {
+    constructor(parent: UserList, username: string, password: string, config?: Config) {
         this.username = username;
         this.password = password;
+        this.globalConfig = parent.config;
         if (config) {
             this.config = config
         } else {
             this.config = new Config()
         }
-            
+        this.davuser = parent.usermanager.addUser(username, password, false)
+        parent.privelegeManager.setRights(this.davuser, '/', ['all'])
     }
 }
 
 export class UserList {
-    private readonly users: User[];
-    private readonly config: Config;
+    private readonly users: User[] = [];
+    readonly usermanager: SimpleUserManager
+    readonly privelegeManager: SimplePathPrivilegeManager
+    config: Config;
 
-    static restore(value: any) {
+    async fromJSON(path: string) {
+        const value = JSON.parse((await fsp.readFile(path)).toString())
         if (value.users) {
-            let users: User[] = [];
-            value.users.forEach((value: any) => users.push(User.restore(value)!))
-            return new UserList(users, Config.restore(value.config))
+            this.config = Config.restore(value.config)
+            value.users.forEach((value: any) => {
+                if (!this.getUserByName(value.username)) {
+                    this.addUserRaw(User.restore(this, value)!)
+                }
+            })
+            // TODO: Add user removal
         }
     }
 
@@ -89,28 +96,39 @@ export class UserList {
             }
         }
     }
+
+    addUser(username: string, password: string, config?: Config): void {
+        const user = new User(this, username, password, config)
+        this.users.push(user)
+    }
+
+    addUserRaw(user: User): void {
+        this.users.push(user)
+    }
+
+    getUserByDavuser(davuser: IUser) {
+        for (let user of this.users) {
+            if (user.davuser === davuser) {
+                return user;
+            }
+        }
+    }
+
+    getUserByName(username: string) {
+        for (let user of this.users) {
+            if (username == user.username) {
+                return user
+            }
+        }
+    }
     
-    constructor(users: User[], config?: Config) {
-        this.users = users;
+    constructor(config?: Config) {
         if (config) {
             this.config = config
         } else {
             this.config = new Config()
         }
-        this.users.forEach((user) => {
-            user.setGlobalConfig(this.config)
-        })
+        this.usermanager = new SimpleUserManager()
+        this.privelegeManager = new SimplePathPrivilegeManager()
     }
-}
-
-export async function multi(path: string) {
-    const out = UserList.restore(JSON.parse((await fsp.readFile(path)).toString()))
-    if (!out) throw new Error("Malformed userlist JSON")
-    return out
-}
-
-export async function single(username: string, password: string) {
-    return new UserList([
-        new User(username, password, new Config(undefined, process.env.MPATH || pathlib.join(__dirname, "../data")))
-    ])
 }
