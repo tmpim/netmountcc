@@ -2,6 +2,7 @@ import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
+import chokidar from 'chokidar'
 import { Attributes, NetFS } from "./fs"
 import { single, multi, UserList } from './userlist';
 
@@ -33,10 +34,19 @@ if (process.env.USERNAME && process.env.PASSWORD) {
         userlist = ulist
     })
 } else if (process.env.USERLIST) {
-    multi(process.env.USERLIST).then((ulist) => {
+    let path: string = process.env.USERLIST;
+    multi(path).then((ulist) => {
         userlist = ulist
     })
+    chokidar.watch(path).on("change", async () => {
+        try {
+            userlist = await multi(path)
+        } catch (e) {
+            console.log(e)
+        }
+    })
 }
+
 
 app.ws('/', async (ws, req) => {
     const user = userlist.authenticate(req.headers.authorization)
@@ -74,13 +84,7 @@ app.ws('/', async (ws, req) => {
         // heartbeat
         const beat = setInterval(() => {
             ws.ping()
-            debug("ping!")
         }, 1000 * 20)
-        if (process.env.DEBUG) {
-            ws.on("pong", () => {
-                console.log("pong!")
-            })
-        }
         // other message listener
         ws.on("message", async (data, binary) => {
             try {
@@ -101,6 +105,7 @@ app.ws('/', async (ws, req) => {
                     } catch (e) {
                         out = {
                             ok: false,
+                            type: content.type,
                             err: e
                         }
                     }
@@ -122,7 +127,9 @@ app.ws('/', async (ws, req) => {
         ws.on("close", (code, reason) => {
             debug(`Connection closed by ${req.ip}. ${code}: ${reason || "unknown"}`)
             clearInterval(beat)
-            closeListener()
+            if (closeListener) {
+                closeListener()
+            }
         })
     } else {
         ws.close(1003, 'Authentication required.')

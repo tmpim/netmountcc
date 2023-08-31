@@ -70,10 +70,29 @@ export class NetFS {
         return pathlib.join(this.netpath, safePath)
     }
 
+    private async treemax(path: string, dest: string, attrs: Attributes) {
+        if (attrs.isDir) {
+            for (const file of await fsp.readdir(path, {recursive: true})) {
+                if (pathlib.join(dest, file).split("/").length > 128) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private makeMethods() {
         this.methods.set("move", async (data: any) => {
-            if (await this.getAttributes(data.path)) {
+            const attrs = await this.getAttributes(data.path)
+            if (attrs) {
                 const path = this.join(data.path)
+                if (await this.treemax(path, data.dest, attrs)) {
+                    return {
+                        ok: false,
+                        type: "move",
+                        err: "Trees greater than 128 directories not allowed"
+                    }
+                }
                 try {
                     await fsp.cp(path, this.join(data.dest), {
                         recursive: true,
@@ -102,8 +121,16 @@ export class NetFS {
             }
         })
         this.methods.set("copy", async (data: any) => {
-            if (await this.getAttributes(data.path)) {
+            const attrs = await this.getAttributes(data.path)
+            if (attrs) {
                 try {
+                    if (await this.treemax(data.path, data.dest, attrs)) {
+                        return {
+                            ok: false,
+                            type: "copy",
+                            err: "Trees greater than 128 directories not allowed"
+                        }
+                    }
                     await fsp.cp(this.join(data.path), this.join(data.dest), {
                         recursive: true,
                         force: false,
@@ -114,7 +141,7 @@ export class NetFS {
                         type: "copy",
                         data: undefined
                     }
-                } catch {
+                } catch (e) {
                     return {
                         ok: false,
                         type: "copy",
@@ -148,6 +175,13 @@ export class NetFS {
             }
         })
         this.methods.set("makeDir", async (data: any) => {
+            if (this.join(data.path).split("/").length > 128) {
+                return {
+                    ok: false,
+                    type: "makeDir",
+                    err: "Trees greater than 128 directories not allowed"
+                }
+            }
             await fsp.mkdir(this.join(data.path), { recursive: true });
             return {
                 ok: true,
@@ -156,6 +190,13 @@ export class NetFS {
             }
         })
         this.methods.set("writeFile", async (data: any) => {
+            if (this.join(data.path).split("/").length > 128) {
+                return {
+                    ok: false,
+                    type: "writeFile",
+                    err: "Trees greater than 128 directories not allowed"
+                }
+            }
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 if (attrs.isDir) {

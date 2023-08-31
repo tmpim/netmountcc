@@ -46,7 +46,11 @@ export class User {
     }
 
     getLimit() {
-        if (this.config.limit) return this.config.limit
+        if (this.config.limit && this.config.limit < 0) {
+            return undefined
+        } else if (this.config.limit) {
+            return this.config.limit
+        }
         if (this.globalConfig?.limit) return this.globalConfig.limit
     }
 

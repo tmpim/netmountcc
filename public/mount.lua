@@ -182,7 +182,7 @@ do
     url = url:gsub("^http", "ws")
 end
 
-local netroot = table.remove(args, 1) or "net"
+local netroot = fs.combine(table.remove(args, 1) or "net")
 assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
 
 local function toNetRoot(path)
@@ -400,7 +400,7 @@ local function initfs(ws, syncData)
         else
             local list = ofs.list(path)
             if #path == 0 then
-                list[#list + 1] = "net"
+                list[#list + 1] = netroot
             end
             return list
         end
@@ -801,14 +801,20 @@ local function setup()
                 end
             elseif event == "websocket_closed" and wsurl == url then
                 out = { false, "Closed: "..(eventData[2] or "unknown code") .. ": " .. (eventData[1] or "unknown reason") }
+                return
             elseif event == "websocket_failure" and wsurl == url then
                 out = { false, "Failed: "..(eventData[1] or "unknown reason") }
+                return
             end
         end
     end, function()
         sleep(5)
     end)
-    return table.unpack(out)
+    if out then
+        return table.unpack(out)
+    else
+        return false, "Timeout"
+    end
 end
 
 local suc, wsclose, syncData, fs = setup()
