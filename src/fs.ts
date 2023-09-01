@@ -1,4 +1,5 @@
 import pathlib from 'path';
+import express from 'express';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
@@ -35,7 +36,7 @@ const dirSize = async (dir: string): Promise<number> => {
 }
 
 export interface AsyncFSFunction {
-    (data: Object): Promise<Object | undefined>;
+    (data: Object, ws: WebSocket): Promise<Object | undefined>;
 }
 
 export class Attributes {
@@ -56,16 +57,25 @@ export class Attributes {
 
 type WatcherCallback = (path: string, attributes: Attributes | false) => void
 
+function replacer(key: any, value: any) {
+    if(value instanceof Map) {
+        return Object.fromEntries(value);
+    } else {
+        return value;
+    }
+}
+
 export class NetFS {
     readonly user: User;
-    readonly ws: WebSocket;
-    readonly methods: Map<string, AsyncFSFunction> = new Map()
-
+    
+    private connections = 0;
+    private closeWatcher: (() => void) | undefined;
+    private readonly methods: Map<string, AsyncFSFunction> = new Map()
     private readonly netpath: string;
     private readonly contents: Map<string, Attributes> = new Map()
     private readonly callbacks: Map<number, WatcherCallback> = new Map()
 
-    private join(path: string) {
+    join(path: string) {
         var safePath = pathlib.normalize(path).replace(/^(\.\.(\/|\\|$))+/, '');
         return pathlib.join(this.netpath, safePath)
     }
@@ -82,7 +92,7 @@ export class NetFS {
     }
 
     private makeMethods() {
-        this.methods.set("move", async (data: any) => {
+        this.methods.set("move", async (data: any, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 const path = this.join(data.path)
@@ -120,7 +130,7 @@ export class NetFS {
                 }
             }
         })
-        this.methods.set("copy", async (data: any) => {
+        this.methods.set("copy", async (data: any, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 try {
@@ -156,7 +166,7 @@ export class NetFS {
                 }
             }
         })
-        this.methods.set("delete", async (data: any) => {
+        this.methods.set("delete", async (data: any, ws: WebSocket) => {
             if (await this.getAttributes(data.path)) {
                 await fsp.rm(this.join(data.path), {
                     recursive: true
@@ -174,7 +184,7 @@ export class NetFS {
                 }
             }
         })
-        this.methods.set("makeDir", async (data: any) => {
+        this.methods.set("makeDir", async (data: any, ws: WebSocket) => {
             if (this.join(data.path).split("/").length > 128) {
                 return {
                     ok: false,
@@ -189,7 +199,7 @@ export class NetFS {
                 data: undefined
             }
         })
-        this.methods.set("writeFile", async (data: any) => {
+        this.methods.set("writeFile", async (data: any, ws: WebSocket) => {
             if (this.join(data.path).split("/").length > 128) {
                 return {
                     ok: false,
@@ -213,11 +223,11 @@ export class NetFS {
                     }
                 }
             }
-            new WriteStream(data.uuid, this.join(data.path), data.chunks, this)
+            new WriteStream(data.uuid, this.join(data.path), data.chunks, ws, this)
             return undefined;
             
         })
-        this.methods.set("readFile", async (data: any) => {
+        this.methods.set("readFile", async (data: any, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (!attrs || (attrs && attrs.isDir)) {
                 return {
@@ -226,7 +236,7 @@ export class NetFS {
                     err: "/" + data.path + ": No such file"
                 }
             }
-            new ReadStream(this.join(data.path), this)
+            new ReadStream(this.join(data.path), ws, this)
             return undefined;
         })
     }
@@ -255,26 +265,123 @@ export class NetFS {
         }
     }
 
-    async run(callback: () => void) {
+    private async onReady(callback: () => void) {
         // Create the directory if it doesn't exist already
         await fsp.mkdir(this.join(""), { recursive: true });
-        chokidar.watch(this.join(""), {
+        let watcher = chokidar.watch(this.join(""), {
             alwaysStat: true,
             ignorePermissionErrors: true
         }).on("all", async (name, path, stats) => {
             path = path.replace(this.join(""), "").replace(/^\//, "")
             const attributes: Attributes | false = await this.getAttributes(path, stats);
-            // console.log(name, path, attributes)
             if (attributes) {
                 this.contents.set(path, attributes)
             } else {
                 this.contents.delete(path)
             }
-            this.callbacks.forEach((callback) => {
-                callback(path, attributes)
+            this.callbacks.forEach((cb) => {
+                cb(path, attributes)
             })
         }).on("ready", callback)
-        
+        return watcher.close
+    }
+
+    private onUpdate(callback: WatcherCallback): () => void {
+        const id = this.callbacks.size
+        this.callbacks.set(id, callback)
+        return () => {
+            this.callbacks.delete(id)
+        }
+    }
+
+    async run(ws: WebSocket, req: express.Request) {
+        debug("Connection established by ", this.user.username, "on", req.ip)
+        const send = (data: object) => ws.send(JSON.stringify(data, replacer))
+
+        let clearUpdateListener: () => void;
+        const setup = async () => {
+            // hello!
+            send({
+                ok: true,
+                type: "hello",
+                data: {
+                    contents: this.getContents(),
+                    capacity: await this.getCapacity()
+                }
+            })
+
+            // sync relay
+            clearUpdateListener = this.onUpdate(async (path: string, attributes: false | Attributes) => {
+                debug("sync", path, req.ip)
+                send({
+                    ok: true,
+                    type: "sync",
+                    data: {
+                        path,
+                        attributes,
+                        capacity: await this.getCapacity()
+                    }
+                })
+            })
+        }
+
+        if (this.connections == 0) {
+            // Set up watcher on first connection
+            this.closeWatcher = await this.onReady(setup)
+        } else {
+            setup()
+        }
+
+        this.connections++;
+
+        ws.on("message", async (data, binary) => {
+            try {
+                let content = JSON.parse(data.toString());
+                if (!content.type) {
+                    send({
+                        ok: false,
+                        err: "Missing request type"
+                    })
+                    return
+                }
+                const method = this.methods.get(content.type)
+                if (method) {
+                    debug("in: ", data)
+                    let out;
+                    try {
+                        out = await method(content, ws)
+                    } catch (e) {
+                        out = {
+                            ok: false,
+                            type: content.type,
+                            err: e
+                        }
+                    }
+                    debug("out: ", out)
+                    if (out) {
+                        send(out)
+                    }
+                } else {
+                    send({
+                        ok: false,
+                        type: content.type,
+                        err: "No such request type '" + content.type + "'"
+                    })
+                }
+            } catch {
+                // Could be a read/write stream blob. Just ignore.
+            }
+        })
+        ws.on("close", (code, reason) => {
+            debug(`Connection closed by ${req.ip}. ${code}: ${reason || "unknown"}`)
+            this.connections--;
+            if (clearUpdateListener) clearUpdateListener();
+            if (this.closeWatcher && this.connections == 0) {
+                // Close watcher on last disconnection
+                this.closeWatcher()
+                this.closeWatcher = undefined;
+            } 
+        })
     }
 
     getContents(): Map<string, Attributes> {
@@ -294,17 +401,8 @@ export class NetFS {
         return [free, size]
     }
 
-    watch(callback: WatcherCallback): () => void {
-        const id = this.callbacks.size
-        this.callbacks.set(id, callback)
-        return () => {
-            this.callbacks.delete(id)
-        }
-    }
-
-    constructor(user: User, ws: WebSocket) {
+    constructor(user: User) {
         this.user = user;
-        this.ws = ws;
         this.netpath = this.user.getPath()
         this.makeMethods()
     }

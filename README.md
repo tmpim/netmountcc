@@ -4,6 +4,8 @@ Websocket based file transfer system for ComputerCraft.
 
 ## Connecting
 
+### ComputerCraft
+
 Netmount ships with a client program on the URL path `/mount.lua` This is the only non-password protected resource.
 To use, on a CC Computer run:
 ```sh
@@ -23,6 +25,10 @@ where:
 - `password` - the chosen netmount password 
 - `path` - the chosen path the netmount will be located
 For information on setting up a username and password, see [Production Setup](#production-setup)
+
+### WebDAV
+
+Netmount also provides a WebDAV server at the `/webdav` endpoint. The same URL used as an argument in mount.lua gets used here.
 
 ## Configuration
 
@@ -69,6 +75,9 @@ They will be added to the json file like so:
     ]
 }
 ```
+
+Users added to the JSON file once saved, assuming no syntax errors, get added without needing to restart the server. Auto removals are NYI.
+All limits and custom paths are respected by the WebDAV endpoint, no further configuration needed.
 
 ## Workspace Setup
 

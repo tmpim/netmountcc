@@ -1,6 +1,7 @@
 import pathlib from 'path';
 import fsp from 'fs/promises';
 import { IUser, SimpleUserManager, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
+import { NetFS } from './fs';
 
 export class Config {
     readonly limit!: number
@@ -24,8 +25,9 @@ export class User {
     readonly username: string;
     readonly password: string;
     readonly config: Config;
+    readonly netfs: NetFS
+    readonly davuser: IUser;
     globalConfig: Config;
-    readonly davuser: IUser
 
     static restore (userlist: UserList, value: any) {
         if (value.username && value.password) {
@@ -62,7 +64,8 @@ export class User {
             this.config = new Config()
         }
         this.davuser = parent.usermanager.addUser(username, password, false)
-        parent.privelegeManager.setRights(this.davuser, '/', ['all'])
+        this.netfs = new NetFS(this)
+        parent.privelegeManager.setRights(this.davuser, "/", ['all'])
     }
 }
 
@@ -108,7 +111,7 @@ export class UserList {
 
     getUserByDavuser(davuser: IUser) {
         for (let user of this.users) {
-            if (user.davuser === davuser) {
+            if (user.davuser == davuser) {
                 return user;
             }
         }

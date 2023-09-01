@@ -13,12 +13,11 @@ function debug(message?: any, ...optionalParams: any[]) {
 
 // Safely below the max socket send limit, and divisible by 3 so base64 encoding leaves no trailing padding
 const chunkSize = Math.pow(2, 16);
-const encoder = new TextEncoder()
-const decoder = new TextDecoder("latin1")
 
 class Stream {
     readonly uuid: string;
     protected readonly path: string;
+    protected readonly ws: WebSocket;
     protected readonly fs: NetFS;
 
     protected serialize(id: 0, chunk: number, data: string): string
@@ -89,9 +88,10 @@ class Stream {
         return undefined;
     }
 
-    constructor(uuid: string, path: string, fs: NetFS) {
+    constructor(uuid: string, path: string, ws: WebSocket, fs: NetFS) {
         this.uuid = uuid
         this.path = path;
+        this.ws = ws;
         this.fs = fs;
     }
 }
@@ -103,7 +103,7 @@ export class ReadStream extends Stream {
         const chunkTotal = Math.ceil(data.length/chunkSize)
         let total = 0;
 
-        this.fs.ws.send(JSON.stringify({
+        this.ws.send(JSON.stringify({
             ok: true,
             type: "readFile",
             data: {
@@ -119,21 +119,21 @@ export class ReadStream extends Stream {
                     total++;
                     if (total == chunkTotal) {
                         debug(`sending complete`)
-                        this.fs.ws.removeListener("message", listener)
+                        this.ws.removeListener("message", listener)
                     }
                     return
                 }
                 const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1)))
-                this.fs.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk.toString("binary")), "binary"), {binary: true})
+                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk.toString("binary")), "binary"), {binary: true})
                 debug(`sent chunk ${res.chunk}`)
             }
         }
 
-        this.fs.ws.on("message", listener)
+        this.ws.on("message", listener)
     }
 
-    constructor(path: string, fs: NetFS) {
-        super(v4(), path, fs)
+    constructor(path: string, ws: WebSocket, fs: NetFS) {
+        super(v4(), path, ws, fs)
         this.run()
     }
 }
@@ -150,34 +150,34 @@ export class WriteStream extends Stream {
                 debug(`got chunk ${res.chunk}`)
                 chunks[res.chunk] = Buffer.from(res.data, 'binary')
                 total++;
-                this.fs.ws.send(this.serialize(2, res.chunk), {binary: true})
+                this.ws.send(this.serialize(2, res.chunk), {binary: true})
             }
             if (total == this.chunkTotal) {
-                this.fs.ws.removeListener("message", listener)
+                this.ws.removeListener("message", listener)
                 let size = 0;
                 chunks.forEach((buf: Buffer) => size += buf.length)
                 const capinfo = await this.fs.getCapacity()
                 if (capinfo[0]-size <= 0) {
                     debug('out of space')
-                    this.fs.ws.send(this.serialize(3, "Out of space"))
+                    this.ws.send(this.serialize(3, "Out of space"))
                 } else {
                     debug('saving chunks')
                     await fsp.mkdir(pathlib.dirname(this.path), { recursive: true })
                     await fsp.writeFile(this.path, chunks, { encoding: 'binary' })
-                    this.fs.ws.send(this.serialize(3))
+                    this.ws.send(this.serialize(3))
                 }
             }
         }
-        this.fs.ws.on("message", listener)
+        this.ws.on("message", listener)
         for (let chunk = 0; chunk < this.chunkTotal; chunk++) {
-            this.fs.ws.send(this.serialize(1, chunk), {binary: true})
+            this.ws.send(this.serialize(1, chunk), {binary: true})
         }
     }
 
-    constructor(uuid: string, path: string, chunks: number, fs: NetFS) {
-        super(uuid, path, fs)
+    constructor(uuid: string, path: string, chunks: number, ws: WebSocket, fs: NetFS) {
+        super(uuid, path, ws, fs)
         this.chunkTotal = chunks
-        this.fs.ws.send(JSON.stringify({
+        this.ws.send(JSON.stringify({
             ok: true,
             type: "writeFile",
             data: {
