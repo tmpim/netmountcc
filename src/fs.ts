@@ -283,7 +283,10 @@ export class NetFS {
                 cb(path, attributes)
             })
         }).on("ready", callback)
-        return watcher.close
+        
+        return () => { 
+            watcher.close()
+        }
     }
 
     private onUpdate(callback: WatcherCallback): () => void {
