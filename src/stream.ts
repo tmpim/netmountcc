@@ -141,7 +141,7 @@ export class WriteStream extends Stream {
         let chunks: Buffer[] = [];
         let total = 0;
         const listener = async (wsdata: RawData, binary: boolean) => {
-            const res = this.unserialize(wsdata.toString())
+            const res = this.unserialize(wsdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
                 debug(`got chunk ${res.chunk}`)
                 chunks[res.chunk] = Buffer.from(res.data, 'binary')

@@ -678,7 +678,6 @@ local function initfs(ws, syncData)
                 local out = internal.buffer:gsub("\n$", "")
                 local ok, data = writeStream(path, binary and out or latinToUtf(out))
                 if ok then
-                    print(data.path, data.attributes)
                     syncData.contents[data.path] = data.attributes
                 else
                     error("Write stream error: "..(data or "Unknown"))
