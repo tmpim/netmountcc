@@ -33,12 +33,7 @@ import { join as pathJoin } from 'path'
 import { XMLElement } from 'xml-js-builder'
 import { UserList } from "./userlist";
 import * as fs from 'fs'
-
-function debug(message?: any, ...optionalParams: any[]) {
-    if (process.env.DEBUG) {
-        console.log(message, ...optionalParams)
-    }
-}
+import { debug } from "./debug";
 
 export class UserListStorageManager implements IStorageManager
 {

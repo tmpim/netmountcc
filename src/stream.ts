@@ -4,12 +4,7 @@ import pathlib from 'path';
 import {WebSocket, RawData} from 'ws'
 import { User } from './userlist';
 import { NetFS } from './fs';
-
-function debug(message?: any, ...optionalParams: any[]) {
-    if (process.env.DEBUG) {
-        console.log(message, ...optionalParams)
-    }
-}
+import { debug } from './debug';
 
 // Safely below the max socket send limit, and divisible by 3 so base64 encoding leaves no trailing padding
 const chunkSize = Math.pow(2, 16);

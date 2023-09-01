@@ -7,12 +7,7 @@ import { v2 as webdav } from 'webdav-server'
 import { UserList, Config } from './userlist';
 import { PerUserFileSystem, UserListStorageManager } from './webdav'
 import { PhysicalFileSystem } from 'webdav-server/lib/index.v2';
-
-function debug(message?: any, ...optionalParams: any[]) {
-    if (process.env.DEBUG) {
-        console.log(message, ...optionalParams)
-    }
-}
+import { debug } from './debug';
 
 const app = expressWs(express()).app
 app.enable("trust proxy")

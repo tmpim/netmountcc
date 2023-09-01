@@ -6,13 +6,8 @@ import fsp from 'fs/promises';
 import { v4 } from 'uuid';
 import { WriteStream, ReadStream } from './stream'
 import { WebSocket, RawData } from 'ws'
-import { User} from './userlist'
-
-function debug(message?: any, ...optionalParams: any[]) {
-    if (process.env.DEBUG) {
-        console.log(message, ...optionalParams)
-    }
-}
+import { User } from './userlist'
+import { debug } from './debug'
 
 const dirSize = async (dir: string): Promise<number> => {
     try {

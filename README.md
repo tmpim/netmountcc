@@ -28,7 +28,7 @@ For information on setting up a username and password, see [Production Setup](#p
 
 ### WebDAV
 
-Netmount also provides a WebDAV server at the `/webdav` endpoint. The same URL used as an argument in mount.lua gets used here.
+Netmount also provides a WebDAV server at the `/webdav` endpoint. The same URL used as an argument in `mount.lua` gets used here.
 
 ## Configuration
 
