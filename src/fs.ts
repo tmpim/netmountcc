@@ -108,7 +108,10 @@ export class NetFS {
                     return {
                         ok: true,
                         type: "move",
-                        data: undefined
+                        data: {
+                            path: data.path,
+                            attributes: await this.getAttributes(data.path)
+                        }
                     }
                 } catch {
                     return {
@@ -144,7 +147,10 @@ export class NetFS {
                     return {
                         ok: true,
                         type: "copy",
-                        data: undefined
+                        data: {
+                            path: data.path,
+                            attributes: await this.getAttributes(data.path)
+                        }
                     }
                 } catch (e) {
                     return {
@@ -169,7 +175,10 @@ export class NetFS {
                 return {
                     ok: true,
                     type: "delete",
-                    data: undefined
+                    data: {
+                        path: data.path,
+                        attributes: await this.getAttributes(data.path)
+                    }
                 }
             } else {
                 return {
@@ -180,18 +189,23 @@ export class NetFS {
             }
         })
         this.methods.set("makeDir", async (data: any, ws: WebSocket) => {
-            if (this.join(data.path).split("/").length > 128) {
+            const path = this.join(data.path)
+            if (path.split("/").length > 128) {
                 return {
                     ok: false,
                     type: "makeDir",
                     err: "Trees greater than 128 directories not allowed"
                 }
             }
-            await fsp.mkdir(this.join(data.path), { recursive: true });
+            await fsp.mkdir(path, { recursive: true });
+            
             return {
                 ok: true,
                 type: "makeDir",
-                data: undefined
+                data: {
+                    path: data.path,
+                    attributes: await this.getAttributes(data.path)
+                }
             }
         })
         this.methods.set("writeFile", async (data: any, ws: WebSocket) => {
@@ -293,7 +307,7 @@ export class NetFS {
     }
 
     async run(ws: WebSocket, req: express.Request) {
-        debug("Connection established by ", this.user.username, "on", req.ip)
+        debug(`Connection established by ${this.user.username} on ${req.ip}`)
         const send = (data: object) => ws.send(JSON.stringify(data, replacer))
 
         let clearUpdateListener: () => void;
@@ -371,7 +385,7 @@ export class NetFS {
             }
         })
         ws.on("close", (code, reason) => {
-            debug(`Connection closed by ${req.ip}. ${code}: ${reason || "unknown"}`)
+            debug(`Connection closed by ${this.user.username} on ${req.ip}. ${code}: ${reason || "unknown"}`)
             this.connections--;
             if (clearUpdateListener) clearUpdateListener();
             if (this.closeWatcher && this.connections == 0) {

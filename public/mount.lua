@@ -515,7 +515,7 @@ local function initfs(ws, syncData)
                     path = path
                 })
                 if ok then
-                    return err
+                    syncData[err.path] = err.attributes or nil
                 else
                     error(err)
                 end
@@ -544,7 +544,9 @@ local function initfs(ws, syncData)
                     path = path,
                     dest = dest
                 })
-                if not ok then
+                if ok then
+                    syncData[err.path] = err.attributes or nil
+                else
                     error(err)
                 end
             elseif not (pnet or dnet) then
