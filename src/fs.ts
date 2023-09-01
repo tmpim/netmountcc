@@ -232,7 +232,7 @@ export class NetFS {
                     }
                 }
             }
-            new WriteStream(data.uuid, this.join(data.path), data.chunks, ws, this)
+            new WriteStream(data.uuid, data.path, data.chunks, ws, this)
             return undefined;
             
         })
@@ -245,7 +245,7 @@ export class NetFS {
                     err: "/" + data.path + ": No such file"
                 }
             }
-            new ReadStream(this.join(data.path), ws, this)
+            new ReadStream(data.path, ws, this)
             return undefined;
         })
     }

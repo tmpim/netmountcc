@@ -98,7 +98,8 @@ do
         "^[0] ([0-9a-fA-F-]+) (%d+) (.*)$",
         "^[1] ([0-9a-fA-F-]+) (%d+)$",
         "^[2] ([0-9a-fA-F-]+) (%d+)$",
-        "^[3] ([0-9a-fA-F-]+) (.*)$"
+        "^[3] ([0-9a-fA-F-]+) (.*)$",
+        "^[4] ([0-9a-fA-F-]+) (.*)$",
     }
 
     function unserializeStream(str)
@@ -106,7 +107,8 @@ do
         -- 0 uuid chunk# [data] - Transmit data
         -- 1 uuid chunk# - Request chunk
         -- 2 uuid chunk# - Flag chunk as received
-        -- 3 uuid reason - Close stream
+        -- 3 uuid reason - End write stream, failed
+        -- 4 uuid attrs - End write stream, success
         local method = tonumber(str:sub(1, 1))
         if method == 0 then
             str:gsub(patterns[1], function(uuid, chunk, data)
@@ -134,9 +136,17 @@ do
         elseif method == 3 then
             str:gsub(patterns[4], function(uuid, reason)
                 out = {
-                    ok = #reason == 0,
+                    ok = false,
                     uuid = uuid,
                     err = reason
+                }
+            end)
+        elseif method == 4 then
+            str:gsub(patterns[5], function(uuid, json)
+                out = {
+                    ok = true,
+                    uuid = uuid,
+                    data = unserializeJSON(json)
                 }
             end)
         end
@@ -340,7 +350,7 @@ local function initfs(ws, syncData)
         end)
         if suc then
             return streamListen(uuid, nil, function(response)
-                return response.ok, response.err
+                return response.ok, response.err or response.data
             end)
         else
             err = (err or "Reason unknown")
@@ -515,7 +525,7 @@ local function initfs(ws, syncData)
                     path = path
                 })
                 if ok then
-                    syncData[err.path] = err.attributes or nil
+                    syncData.contents[err.path] = err.attributes or nil
                 else
                     error(err)
                 end
@@ -545,7 +555,7 @@ local function initfs(ws, syncData)
                     dest = dest
                 })
                 if ok then
-                    syncData[err.path] = err.attributes or nil
+                    syncData.contents[err.path] = err.attributes or nil
                 else
                     error(err)
                 end
@@ -581,7 +591,9 @@ local function initfs(ws, syncData)
                     local data = file.readAll()
                     file.close()
                     local ok, err = writeStream(dest, data)
-                    if not ok then
+                    if ok then
+                        syncData[err.path] = err.attributes
+                    else
                         error("Write stream error: "..data)
                     end
                 end
@@ -665,7 +677,10 @@ local function initfs(ws, syncData)
                 internal.ibuffer = internal.buffer
                 local out = internal.buffer:gsub("\n$", "")
                 local ok, data = writeStream(path, binary and out or latinToUtf(out))
-                if not ok then
+                if ok then
+                    print(data.path, data.attributes)
+                    syncData.contents[data.path] = data.attributes
+                else
                     error("Write stream error: "..(data or "Unknown"))
                 end
             end
@@ -848,11 +863,17 @@ if suc then
     end
 
     local function close()
+        local attempts = 0
         while true do
             local _, wsurl, reason, code = os.pullEventRaw("websocket_closed")
             if wsurl == url then
+                attempts = attempts + 1
                 suc, wsclose, syncData, fs = setup()
-                if not suc then
+                if suc then
+                    attempts = 0
+                elseif not suc then
+                    sleep(1)
+                elseif attempts == 3 then
                     return
                 end
                 _G.fs = fs

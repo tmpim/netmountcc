@@ -20,6 +20,7 @@ class Stream {
     protected serialize(id: 2, chunk: number): string
     protected serialize(id: 3, reason: string): string
     protected serialize(id: 3): string
+    protected serialize(id: 4, json: string): string
     protected serialize(id: number, ...args: any[]): string {
         let out = id.toString() + " " + this.uuid
         if (args.length == 0) {
@@ -94,7 +95,7 @@ class Stream {
 export class ReadStream extends Stream {
 
     async run() {
-        const data = Buffer.from(await fsp.readFile(this.path, { encoding: 'binary' }), "binary")
+        const data = Buffer.from(await fsp.readFile(this.fs.join(this.path), { encoding: 'binary' }), "binary")
         const chunkTotal = Math.ceil(data.length/chunkSize)
         let total = 0;
 
@@ -157,9 +158,13 @@ export class WriteStream extends Stream {
                     this.ws.send(this.serialize(3, "Out of space"))
                 } else {
                     debug('saving chunks')
-                    await fsp.mkdir(pathlib.dirname(this.path), { recursive: true })
-                    await fsp.writeFile(this.path, chunks, { encoding: 'binary' })
-                    this.ws.send(this.serialize(3))
+                    const realpath = this.fs.join(this.path)
+                    await fsp.mkdir(pathlib.dirname(realpath), { recursive: true })
+                    await fsp.writeFile(realpath, chunks, { encoding: 'binary' })
+                    this.ws.send(this.serialize(4, JSON.stringify({
+                        path: this.path,
+                        attributes: await this.fs.getAttributes(realpath)
+                    })))
                 }
             }
         }
