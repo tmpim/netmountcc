@@ -36,7 +36,7 @@ const server = new webdav.WebDAVServer({
     serverName: "netmount",
     requireAuthentification: true,
     httpAuthentication: new webdav.HTTPBasicAuthentication(userlist.usermanager, "netmount"),
-    privilegeManager: userlist.privelegeManager,
+    privilegeManager: userlist.privilegeManager,
     storageManager: new UserListStorageManager(userlist),
     rootFileSystem: new PerUserFileSystem(userlist)
 })

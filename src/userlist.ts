@@ -65,14 +65,14 @@ export class User {
         }
         this.davuser = parent.usermanager.addUser(username, password, false)
         this.netfs = new NetFS(this)
-        parent.privelegeManager.setRights(this.davuser, "/", ['all'])
+        parent.privilegeManager.setRights(this.davuser, "/", ['all'])
     }
 }
 
 export class UserList {
     private readonly users: User[] = [];
     readonly usermanager: SimpleUserManager
-    readonly privelegeManager: SimplePathPrivilegeManager
+    readonly privilegeManager: SimplePathPrivilegeManager
     config: Config;
 
     async fromJSON(path: string) {
@@ -132,6 +132,6 @@ export class UserList {
             this.config = new Config()
         }
         this.usermanager = new SimpleUserManager()
-        this.privelegeManager = new SimplePathPrivilegeManager()
+        this.privilegeManager = new SimplePathPrivilegeManager()
     }
 }
