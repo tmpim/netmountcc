@@ -54,7 +54,7 @@ Optional valid env values include:
 Supply a path to the JSON file using the `USERLIST` variable in the `.env` file. Remove `USERNAME` and `PASSWORD` values if they're present. 
 They will be added to the json file like so:
 ```json5
-{
+{ // Don't forget to remove all of these comments if directly copying this file!!!
     "config": { // Global config. This object is optional
         "limit": 1000000, // 1 MB global limit
         "path": "./custom/path" // Custom path to global data
@@ -70,7 +70,7 @@ They will be added to the json file like so:
         },
         {
             "username": "foobarbat",
-            "password": "verysecurepassword", // Due to netmount using basic http auth, please use a secure and long password!
+            "password": "verysecurepassword" // Due to netmount using basic http auth, please use a secure and long password!
         }
 
     ]

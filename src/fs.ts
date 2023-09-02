@@ -65,8 +65,8 @@ export class NetFS {
     
     private connections = 0;
     private closeWatcher: (() => void) | undefined;
-    private readonly methods: Map<string, AsyncFSFunction> = new Map()
     private readonly netpath: string;
+    private readonly methods: Map<string, AsyncFSFunction> = new Map()
     private readonly contents: Map<string, Attributes> = new Map()
     private readonly callbacks: Map<number, WatcherCallback> = new Map()
 
@@ -86,16 +86,50 @@ export class NetFS {
         return false
     }
 
-    private makeMethods() {
-        this.methods.set("move", async (data: any, ws: WebSocket) => {
+    private async closestAttributes(path: string): Promise<{ attributes: Attributes | false, path: string }> {
+        const dir = (/^(.*)\/.*$/).exec(path)
+        if (!dir) {
+            return {
+                attributes: await this.getAttributes(""),
+                path
+            }
+        } else {
+            const attrs = await this.getAttributes(dir[1])
+            if (attrs) {
+                return {
+                    attributes: attrs,
+                    path
+                }
+            } else {
+                return this.closestAttributes(dir[1])
+            }
+        }
+    }
+
+    private makeRelocate(type: string) {
+        return async (data: any, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 const path = this.join(data.path)
                 if (await this.treemax(path, data.dest, attrs)) {
                     return {
                         ok: false,
-                        type: "move",
+                        type: type,
                         err: "Trees greater than 128 directories not allowed"
+                    }
+                }
+                const { attributes: dattrs } = await this.closestAttributes(data.dest)
+                if (dattrs && dattrs.isReadOnly) {
+                    return {
+                        ok: false,
+                        type: type,
+                        err: "Destination is read-only"
+                    }
+                } else if (attrs.isReadOnly && type === "move") {
+                    return {
+                        ok: false,
+                        type: type,
+                        err: "Cannot move read-only file " + data.path
                     }
                 }
                 try {
@@ -104,10 +138,15 @@ export class NetFS {
                         force: false,
                         errorOnExist: true
                     })
-                    await fsp.rm(path)
+                    if (type === "move") {
+                        await fsp.rm(path, {
+                            recursive: true,
+                            force: true
+                        })
+                    }
                     return {
                         ok: true,
-                        type: "move",
+                        type: type,
                         data: {
                             path: data.path,
                             attributes: await this.getAttributes(data.path)
@@ -116,59 +155,33 @@ export class NetFS {
                 } catch {
                     return {
                         ok: false,
-                        type: "move",
+                        type: type,
                         err: "File exists"
                     }
                 }
             } else {
                 return {
                     ok: false,
-                    type: "move",
+                    type: type,
                     err: "No such file"
                 }
             }
-        })
-        this.methods.set("copy", async (data: any, ws: WebSocket) => {
+        }
+    }
+
+    private makeMethods() {
+        this.methods.set("move", this.makeRelocate("move"))
+        this.methods.set("copy", this.makeRelocate("copy"))
+        this.methods.set("delete", async (data: any, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
-                try {
-                    if (await this.treemax(data.path, data.dest, attrs)) {
-                        return {
-                            ok: false,
-                            type: "copy",
-                            err: "Trees greater than 128 directories not allowed"
-                        }
-                    }
-                    await fsp.cp(this.join(data.path), this.join(data.dest), {
-                        recursive: true,
-                        force: false,
-                        errorOnExist: true
-                    })
-                    return {
-                        ok: true,
-                        type: "copy",
-                        data: {
-                            path: data.path,
-                            attributes: await this.getAttributes(data.path)
-                        }
-                    }
-                } catch (e) {
+                if (attrs.isReadOnly) {
                     return {
                         ok: false,
-                        type: "copy",
-                        err: "File exists"
+                        type: "delete",
+                        err: data.path + ": Access denied"
                     }
                 }
-            } else {
-                return {
-                    ok: false,
-                    type: "copy",
-                    err: "No such file"
-                }
-            }
-        })
-        this.methods.set("delete", async (data: any, ws: WebSocket) => {
-            if (await this.getAttributes(data.path)) {
                 await fsp.rm(this.join(data.path), {
                     recursive: true
                 })
@@ -177,7 +190,7 @@ export class NetFS {
                     type: "delete",
                     data: {
                         path: data.path,
-                        attributes: await this.getAttributes(data.path)
+                        attributes: false
                     }
                 }
             } else {
@@ -190,13 +203,36 @@ export class NetFS {
         })
         this.methods.set("makeDir", async (data: any, ws: WebSocket) => {
             const path = this.join(data.path)
-            if (path.split("/").length > 128) {
-                return {
-                    ok: false,
-                    type: "makeDir",
-                    err: "Trees greater than 128 directories not allowed"
+            const { attributes: attrs, path: cpath } = await this.closestAttributes(data.path)
+            if (attrs) {
+                if (attrs.isReadOnly) {
+                    return {
+                        ok: false,
+                        type: "makeDir",
+                        err: data.path + ": Access denied"
+                    }
+                } else if (!attrs.isDir) {
+                    if (cpath === data.path) {
+                        return {
+                            ok: false,
+                            type: "makeDir",
+                            err: data.path + ": Destination Exists"
+                        }
+                    } else {
+                        return {
+                            ok: false,
+                            type: "makeDir",
+                            err: data.path + ": Could not create directory"
+                        }
+                    }
+                } else if (path.split("/").length > 128) {
+                    return {
+                        ok: false,
+                        type: "makeDir",
+                        err: "Trees greater than 128 directories not allowed"
+                    }
                 }
-            }
+            } 
             await fsp.mkdir(path, { recursive: true });
             
             return {
