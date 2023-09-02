@@ -1,0 +1,8 @@
+.gitignore
+LICENSE
+README.md
+netmountcc.service
+# we wouldnt want some stupid typescript and node stuff to be here now do we
+**/node_modules/
+**/bin/
+
