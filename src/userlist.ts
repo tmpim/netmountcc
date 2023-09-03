@@ -21,12 +21,14 @@ export class Config {
     }
 }
 
-export class User {
+export class User implements IUser {
+    readonly uid: string;
     readonly username: string;
     readonly password: string;
     readonly config: Config;
-    readonly netfs: NetFS
-    readonly davuser: IUser;
+    readonly netfs: NetFS;
+    readonly isAdministrator = false;
+    readonly isDefaultUser = false;
     globalConfig: Config;
 
     static restore (userlist: UserList, value: any) {
@@ -63,9 +65,9 @@ export class User {
         } else {
             this.config = new Config()
         }
-        this.davuser = parent.usermanager.addUser(username, password, false)
+        this.uid = username
         this.netfs = new NetFS(this)
-        parent.privelegeManager.setRights(this.davuser, "/", ['all'])
+        parent.privelegeManager.setRights(this, "/", ['all'])
     }
 }
 
@@ -100,6 +102,13 @@ export class UserList {
         }
     }
 
+    removeUser(user: User) {
+        const index = this.users.indexOf(user)
+        if (index > -1) {
+            this.privelegeManager.setRights(this.users.splice(index, 1)[0], "/", [])
+        }
+    }
+
     addUser(username: string, password: string, config?: Config): void {
         const user = new User(this, username, password, config)
         this.users.push(user)
@@ -107,14 +116,6 @@ export class UserList {
 
     addUserRaw(user: User): void {
         this.users.push(user)
-    }
-
-    getUserByDavuser(davuser: IUser) {
-        for (let user of this.users) {
-            if (user.davuser == davuser) {
-                return user;
-            }
-        }
     }
 
     getUserByName(username: string) {

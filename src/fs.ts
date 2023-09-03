@@ -3,9 +3,8 @@ import express from 'express';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
-import { v4 } from 'uuid';
 import { WriteStream, ReadStream } from './stream'
-import { WebSocket, RawData } from 'ws'
+import { WebSocket } from 'ws'
 import { User } from './userlist'
 import { debug } from './debug'
 
@@ -30,8 +29,9 @@ const dirSize = async (dir: string): Promise<number> => {
     }
 }
 
-export interface AsyncFSFunction {
-    (data: Object, ws: WebSocket): Promise<Object | undefined>;
+type SendFunction = (out: object)=>void
+interface AsyncFSFunction {
+    (data: Object, send: SendFunction, ws: WebSocket): Promise<void>;
 }
 
 export class Attributes {
@@ -107,30 +107,30 @@ export class NetFS {
     }
 
     private makeRelocate(type: string) {
-        return async (data: any, ws: WebSocket) => {
+        return async (data: any, send: SendFunction) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 const path = this.join(data.path)
                 if (await this.treemax(path, data.dest, attrs)) {
-                    return {
+                    send({
                         ok: false,
                         type: type,
                         err: "Trees greater than 128 directories not allowed"
-                    }
+                    })
                 }
                 const { attributes: dattrs } = await this.closestAttributes(data.dest)
                 if (dattrs && dattrs.isReadOnly) {
-                    return {
+                    send({
                         ok: false,
                         type: type,
                         err: "Destination is read-only"
-                    }
+                    })
                 } else if (attrs.isReadOnly && type === "move") {
-                    return {
+                    send({
                         ok: false,
                         type: type,
                         err: "Cannot move read-only file " + data.path
-                    }
+                    })
                 }
                 try {
                     await fsp.cp(path, this.join(data.dest), {
@@ -144,27 +144,27 @@ export class NetFS {
                             force: true
                         })
                     }
-                    return {
+                    send({
                         ok: true,
                         type: type,
                         data: {
                             path: data.path,
                             attributes: await this.getAttributes(data.path)
                         }
-                    }
+                    })
                 } catch {
-                    return {
+                    send({
                         ok: false,
                         type: type,
                         err: "File exists"
-                    }
+                    })
                 }
             } else {
-                return {
+                send({
                     ok: false,
                     type: type,
                     err: "No such file"
-                }
+                })
             }
         }
     }
@@ -172,117 +172,131 @@ export class NetFS {
     private makeMethods() {
         this.methods.set("move", this.makeRelocate("move"))
         this.methods.set("copy", this.makeRelocate("copy"))
-        this.methods.set("delete", async (data: any, ws: WebSocket) => {
+        this.methods.set("delete", async (data: any, send: SendFunction) => {
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 if (attrs.isReadOnly) {
-                    return {
+                    send({
                         ok: false,
                         type: "delete",
                         err: data.path + ": Access denied"
-                    }
+                    })
                 }
                 await fsp.rm(this.join(data.path), {
                     recursive: true
                 })
-                return {
+                send({
                     ok: true,
                     type: "delete",
                     data: {
                         path: data.path,
                         attributes: false
                     }
-                }
+                })
             } else {
-                return {
+                send({
                     ok: false,
                     type: "delete",
                     err: "No such file"
-                }
+                })
             }
         })
-        this.methods.set("makeDir", async (data: any, ws: WebSocket) => {
+        this.methods.set("makeDir", async (data: any, send: SendFunction) => {
             const path = this.join(data.path)
             const { attributes: attrs, path: cpath } = await this.closestAttributes(data.path)
             if (attrs) {
                 if (attrs.isReadOnly) {
-                    return {
+                    send({
                         ok: false,
                         type: "makeDir",
                         err: data.path + ": Access denied"
-                    }
+                    })
                 } else if (!attrs.isDir) {
                     if (cpath === data.path) {
-                        return {
+                        send({
                             ok: false,
                             type: "makeDir",
                             err: data.path + ": Destination Exists"
-                        }
+                        })
                     } else {
-                        return {
+                        send({
                             ok: false,
                             type: "makeDir",
                             err: data.path + ": Could not create directory"
-                        }
+                        })
                     }
                 } else if (path.split("/").length > 128) {
-                    return {
+                    send({
                         ok: false,
                         type: "makeDir",
                         err: "Trees greater than 128 directories not allowed"
-                    }
+                    })
                 }
             } 
             await fsp.mkdir(path, { recursive: true });
             
-            return {
+            send({
                 ok: true,
                 type: "makeDir",
                 data: {
                     path: data.path,
                     attributes: await this.getAttributes(data.path)
                 }
-            }
+            })
         })
-        this.methods.set("writeFile", async (data: any, ws: WebSocket) => {
+        this.methods.set("writeFile", async (data: any, send: SendFunction, ws: WebSocket) => {
             if (this.join(data.path).split("/").length > 128) {
-                return {
+                send({
                     ok: false,
                     type: "writeFile",
                     err: "Trees greater than 128 directories not allowed"
-                }
+                })
             }
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
                 if (attrs.isDir) {
-                    return {
+                    send({
                         ok: false,
                         type: "writeFile",
                         data: "/" + data.path + ": Cannot write to directory"
-                    }
+                    })
                 } else if (attrs.isReadOnly) {
-                    return {
+                    send({
                         ok: false,
                         type: "writeFile",
                         data: "/" + data.path + ": Access denied"
-                    }
+                    })
                 }
             }
-            new WriteStream(data.uuid, data.path, data.chunks, ws, this)
-            return undefined;
-            
+            const writeStream = new WriteStream(data.uuid, data.path, data.chunks, ws, this)
+            send({
+                ok: true,
+                type: "writeFile",
+                data: {
+                    uuid: data.uuid
+                }
+            })
+            writeStream.run()
         })
-        this.methods.set("readFile", async (data: any, ws: WebSocket) => {
+        this.methods.set("readFile", async (data: any, send: SendFunction, ws: WebSocket) => {
             const attrs = await this.getAttributes(data.path)
             if (!attrs || (attrs && attrs.isDir)) {
-                return {
+                send({
                     ok: false,
                     type: "readFile",
                     err: "/" + data.path + ": No such file"
-                }
+                })
             }
-            new ReadStream(data.path, ws, this)
-            return undefined;
+            const readStream = new ReadStream(data.path, ws, this)
+            await readStream.run()
+            send({
+                ok: true,
+                type: "readFile",
+                data: {
+                    uuid: readStream.uuid,
+                    chunks: await readStream.getChunkTotal()
+                }
+            })
         })
     }
 
@@ -343,8 +357,14 @@ export class NetFS {
     }
 
     async run(ws: WebSocket, req: express.Request) {
-        debug(`Connection established by ${this.user.username} on ${req.ip}`)
-        const send = (data: object) => ws.send(JSON.stringify(data, replacer))
+        debug(`Connection established by ${this.user.username} on ${req.ip}. Connection number ${this.connections+1}`)
+        const send = (data: object) => {
+            const out = JSON.stringify(data, replacer)
+            if (out.length < 256) {
+                debug(`to ${this.user.username} on ${req.ip}: ${out}`)
+            }
+            ws.send(out)
+        }
 
         let clearUpdateListener: () => void;
         const setup = async () => {
@@ -385,47 +405,39 @@ export class NetFS {
         ws.on("message", async (data, binary) => {
             try {
                 let content = JSON.parse(data.toString());
-                if (!content.type) {
-                    send({
-                        ok: false,
-                        err: "Missing request type"
-                    })
-                    return
-                }
-                const method = this.methods.get(content.type)
-                if (method) {
-                    debug("in: ", data)
-                    let out;
-                    try {
-                        out = await method(content, ws)
-                    } catch (e) {
-                        out = {
+                if (content.type) {
+                    const method = this.methods.get(content.type)
+                    if (method) {
+                        debug(`from ${this.user.username} on ${req.ip}: ${data}`)
+                        try {
+                            await method(content, send, ws)
+                        } catch (e) {
+                            console.error(e)
+                            send({
+                                ok: false,
+                                type: content.type,
+                                err: "An unknown error occured"
+                            })
+                        }
+                    } else {
+                        send({
                             ok: false,
                             type: content.type,
-                            err: e
-                        }
+                            err: "No such request type '" + content.type + "'"
+                        })
                     }
-                    debug("out: ", out)
-                    if (out) {
-                        send(out)
-                    }
-                } else {
-                    send({
-                        ok: false,
-                        type: content.type,
-                        err: "No such request type '" + content.type + "'"
-                    })
                 }
             } catch {
                 // Could be a read/write stream blob. Just ignore.
             }
         })
         ws.on("close", (code, reason) => {
-            debug(`Connection closed by ${this.user.username} on ${req.ip}. ${code}: ${reason || "unknown"}`)
+            debug(`Connection closed by ${this.user.username} on ${req.ip}. ${code}: ${reason || "unknown"}. Connections remaining: ${this.connections-1}`)
             this.connections--;
             if (clearUpdateListener) clearUpdateListener();
             if (this.closeWatcher && this.connections == 0) {
                 // Close watcher on last disconnection
+                this.contents.clear()
                 this.closeWatcher()
                 this.closeWatcher = undefined;
             } 

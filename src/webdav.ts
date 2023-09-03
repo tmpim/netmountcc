@@ -31,7 +31,7 @@ import { Errors } from "webdav-server/lib/Errors";
 import { Readable, Writable } from 'stream'
 import { join as pathJoin } from 'path'
 import { XMLElement } from 'xml-js-builder'
-import { UserList } from "./userlist";
+import { User, UserList } from "./userlist";
 import * as fs from 'fs'
 import { debug } from "./debug";
 
@@ -46,9 +46,8 @@ export class UserListStorageManager implements IStorageManager
 
     reserve(ctx : RequestContext, fs : FileSystem, size : number, callback : (reserved : boolean) => void) : void
     {
-        const netuser = this.userlist.getUserByDavuser(ctx.user)
-        if (netuser) {
-            netuser.netfs.getCapacity().then((caps) => {
+        if (ctx.user instanceof User) {
+            ctx.user.netfs.getCapacity().then((caps) => {
                 if ( caps[0] - size < 0) {
                     callback(false);
                 } else {
@@ -91,9 +90,8 @@ export class UserListStorageManager implements IStorageManager
 
     available(ctx : RequestContext, fs : FileSystem, callback : (available : number) => void) : void
     {
-        const netuser = this.userlist.getUserByDavuser(ctx.user)
-        if (netuser) {
-            netuser.netfs.getCapacity().then((caps) => {
+        if (ctx.user instanceof User) {
+            ctx.user.netfs.getCapacity().then((caps) => {
                 callback(caps[0])
             })
         } else {
@@ -102,9 +100,8 @@ export class UserListStorageManager implements IStorageManager
     }
     reserved(ctx : RequestContext, fs : FileSystem, callback : (reserved : number) => void) : void
     {
-        const netuser = this.userlist.getUserByDavuser(ctx.user)
-        if (netuser) {
-            netuser.netfs.getCapacity().then((caps) => {
+        if (ctx.user instanceof User) {
+            ctx.user.netfs.getCapacity().then((caps) => {
                 callback(caps[1] - caps[0])
             })
         } else {
@@ -131,13 +128,12 @@ export class PerUserFileSystem extends FileSystem {
     {
         const sPath = path.toString();
         let bPath;
-        let user = this.userList.getUserByDavuser(ctx.user)
         if (ctx.user.username === "_default_super_admin_") {
             bPath = "/dev/null" // Not sure why this user exists, redirect them to hell.
-        } else if (!user) {
+        } else if (!(ctx.user instanceof User)) {
             throw new Error("No Such WebDAV user " + ctx.user.username)
         } else {
-            bPath = user.getPath()
+            bPath = ctx.user.getPath()
         }
 
         return {

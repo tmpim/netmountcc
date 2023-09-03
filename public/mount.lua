@@ -188,20 +188,18 @@ do
             end
         end
     end
-    if #args < 3 then
+    if not (args.username and args.url) then
         print("Usage: mount [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<program>]")
         print("Or, save url, username and password using set. Ex:")
         print("set netmount.url https://netmount.example.com")
         print("setting keys are netmount.url, netmount.username, netmount.password, and netmount.path")
         return
     end
-    local username, password
-    url, username, password = table.remove(args, 1), table.remove(args, 1), table.remove(args, 1)
-    auth = { Authorization = "Basic " .. b64e(username .. ":" .. password) }
-    url = url:gsub("^http", "ws")
+    auth = { Authorization = "Basic " .. b64e(args.username .. ":" .. args.password) }
+    url = args.url:gsub("^http", "ws")
 end
 
-local netroot = fs.combine(table.remove(args, 1) or "net")
+local netroot = fs.combine(args.path or "net")
 assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
 
 local function toNetRoot(path)
@@ -236,7 +234,7 @@ local function initfs(ws, syncData)
                 local _, wsurl, response = os.pullEventRaw("websocket_message")
                 if wsurl == url and response then
                     local json = unserializeJSON(response)
-                    if json.type == data.type then
+                    if json and json.type == data.type then
                         reqres = json
                         return
                     end
@@ -831,10 +829,8 @@ local function setup()
                 ws = eventData[1]
                 local send, close = ws.send, ws.close
                 ws.send = function(data, binary)
-                    local ret = table.pack(pcall(send, data, binary))
-                    if table.remove(ret, 1) then
-                        return table.unpack(ret)
-                    end
+                    local ok = pcall(send, data, binary)
+                    return ok
                 end
                 ws.close = function()
                     pcall(close)
@@ -897,20 +893,20 @@ if suc then
     end
 
     local function close()
-        local attempts = 0
         while true do
             local _, wsurl, reason, code = os.pullEventRaw("websocket_closed")
             if wsurl == url then
-                attempts = attempts + 1
-                suc, wsclose, syncData, fs = setup()
-                if suc then
-                    attempts = 0
-                elseif not suc then
-                    sleep(1)
-                elseif attempts == 3 then
-                    return
+                for attempts = 0, 3 do
+                    suc, wsclose, syncData, fs = setup()
+                    if suc then
+                        _G.fs = fs
+                        break
+                    elseif not suc then
+                        sleep(2)
+                    elseif attempts == 3 then
+                        return
+                    end
                 end
-                _G.fs = fs
             end
         end
     end

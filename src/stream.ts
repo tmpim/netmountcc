@@ -2,11 +2,9 @@ import { v4 } from 'uuid'
 import fsp from 'fs/promises';
 import pathlib from 'path';
 import {WebSocket, RawData} from 'ws'
-import { User } from './userlist';
 import { NetFS } from './fs';
 import { debug } from './debug';
 
-// Safely below the max socket send limit, and divisible by 3 so base64 encoding leaves no trailing padding
 const chunkSize = Math.pow(2, 16);
 
 class Stream {
@@ -93,20 +91,16 @@ class Stream {
 }
 
 export class ReadStream extends Stream {
+    readonly data = fsp.readFile(this.fs.join(this.path), { encoding: 'binary' })
+
+    async getChunkTotal() {
+        return Math.ceil((await this.data).length/chunkSize)
+    }
 
     async run() {
-        const data = Buffer.from(await fsp.readFile(this.fs.join(this.path), { encoding: 'binary' }), "binary")
-        const chunkTotal = Math.ceil(data.length/chunkSize)
+        const data = Buffer.from(await this.data, "binary")
+        const chunkTotal = await this.getChunkTotal()
         let total = 0;
-
-        this.ws.send(JSON.stringify({
-            ok: true,
-            type: "readFile",
-            data: {
-                uuid: this.uuid,
-                chunks: chunkTotal
-            }
-        }))
 
         const listener = (rawdata: RawData, binary: boolean) => {
             const res = this.unserialize(rawdata.toString())
@@ -130,7 +124,6 @@ export class ReadStream extends Stream {
 
     constructor(path: string, ws: WebSocket, fs: NetFS) {
         super(v4(), path, ws, fs)
-        this.run()
     }
 }
 
@@ -177,13 +170,5 @@ export class WriteStream extends Stream {
     constructor(uuid: string, path: string, chunks: number, ws: WebSocket, fs: NetFS) {
         super(uuid, path, ws, fs)
         this.chunkTotal = chunks
-        this.ws.send(JSON.stringify({
-            ok: true,
-            type: "writeFile",
-            data: {
-                uuid: this.uuid
-            }
-        }))
-        this.run()
     }
 }

@@ -9,7 +9,7 @@ Websocket based file transfer system for ComputerCraft.
 Netmount ships with a client program on the URL path `/mount.lua` This is the only non-password protected resource.
 To use, on a CC Computer run:
 ```sh
-> wget run <url>/mount.lua [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<run>]
+> wget run <url>/mount.lua [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<program>]
 ```
 or use the settings API:
 ```sh
@@ -17,6 +17,7 @@ or use the settings API:
 > set netmount.username <username>
 > set netmount.password <password>
 > set netmount.path <path>
+> set netmount.run <program>
 > wget run <url>/mount.lua
 ```
 where:
