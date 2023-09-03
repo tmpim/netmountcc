@@ -1,7 +1,9 @@
 import pathlib from 'path';
 import fsp from 'fs/promises';
-import { IUser, SimpleUserManager, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
+import { IUser, PhysicalFileSystem, SimplePathPrivilegeManager, WebDAVServer } from 'webdav-server/lib/index.v2';
 import { NetFS } from './fs';
+import { v2 as webdav } from 'webdav-server'
+import { CustomSimpleUserManager, PerUserFileSystem, UserListStorageManager } from './webdav';
 
 export class Config {
     readonly limit!: number
@@ -67,14 +69,16 @@ export class User implements IUser {
         }
         this.uid = username
         this.netfs = new NetFS(this)
+        
+        parent.usermanager.addUser(this)
         parent.privelegeManager.setRights(this, "/", ['all'])
     }
 }
 
 export class UserList {
     private readonly users: User[] = [];
-    readonly usermanager: SimpleUserManager
-    readonly privelegeManager: SimplePathPrivilegeManager
+    readonly usermanager: CustomSimpleUserManager;
+    readonly privelegeManager: SimplePathPrivilegeManager;
     config: Config;
 
     async fromJSON(path: string) {
@@ -132,7 +136,7 @@ export class UserList {
         } else {
             this.config = new Config()
         }
-        this.usermanager = new SimpleUserManager()
+        this.usermanager = new CustomSimpleUserManager()
         this.privelegeManager = new SimplePathPrivilegeManager()
     }
 }

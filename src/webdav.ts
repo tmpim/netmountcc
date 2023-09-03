@@ -4,10 +4,13 @@ import {
     DeleteInfo,
     FileSystem,
     IContextInfo,
+    IListUserManager,
     ILockManager,
     IPropertyManager,
     IStorageManager,
     IStorageManagerEvaluateCallback,
+    ITestableUserManager,
+    IUser,
     LastModifiedDateInfo,
     LockManagerInfo,
     MoveInfo,
@@ -24,6 +27,7 @@ import {
     ResourceType,
     ReturnCallback,
     SimpleCallback,
+    SimpleUser,
     SizeInfo,
     TypeInfo
 } from "webdav-server/lib/index.v2";
@@ -34,6 +38,59 @@ import { XMLElement } from 'xml-js-builder'
 import { User, UserList } from "./userlist";
 import * as fs from 'fs'
 import { debug } from "./debug";
+
+export class CustomSimpleUserManager implements ITestableUserManager, IListUserManager
+{
+    protected users : any
+
+    constructor()
+    {
+        this.users = {
+            __default: new SimpleUser('DefaultUser', null, false, true)
+        };
+    }
+
+    getUserByName(name : string, callback : (error : Error, user ?: IUser) => void)
+    {
+        if(!this.users[name])
+            callback(Errors.UserNotFound);
+        else
+            callback(null, this.users[name]);
+    }
+    getDefaultUser(callback : (user : IUser) => void)
+    {
+        callback(this.users.__default);
+    }
+
+    addUser(user: IUser) : IUser
+    {
+        this.users[user.uid] = user;
+        return user;
+    }
+
+    getUsers(callback : (error : Error, users : IUser[]) => void)
+    {
+        const users = [];
+
+        for(const name in this.users)
+            users.push(this.users[name]);
+
+        callback(null, users);
+    }
+    
+    getUserByNamePassword(name : string, password : string, callback : (error : Error, user ?: IUser) => void) : void
+    {
+        this.getUserByName(name, (e, user) => {
+            if(e)
+                return callback(e);
+            
+            if(user && user.password === password)
+                callback(null, user);
+            else
+                callback(Errors.UserNotFound);
+        })
+    }
+}
 
 export class UserListStorageManager implements IStorageManager
 {

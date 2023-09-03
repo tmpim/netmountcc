@@ -5,8 +5,8 @@ import 'dotenv/config'
 import chokidar from 'chokidar'
 import { v2 as webdav } from 'webdav-server'
 import { UserList, Config } from './userlist';
-import { PerUserFileSystem, UserListStorageManager } from './webdav'
 import { debug } from './debug';
+import { PerUserFileSystem, UserListStorageManager } from './webdav';
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
@@ -35,9 +35,14 @@ const server = new webdav.WebDAVServer({
     serverName: "netmount",
     requireAuthentification: true,
     httpAuthentication: new webdav.HTTPBasicAuthentication(userlist.usermanager, "netmount"),
+    rootFileSystem: new PerUserFileSystem(userlist),
     privilegeManager: userlist.privelegeManager,
-    storageManager: new UserListStorageManager(userlist),
-    rootFileSystem: new PerUserFileSystem(userlist)
+    storageManager: new UserListStorageManager(userlist)
+})
+
+server.beforeRequest((ctx, next) => {
+    debug(` ${new Date(Date.now()).toLocaleString()} "${ctx.request.method} ${ctx.request.url}"`)
+    next()
 })
 
 app.use(webdav.extensions.express('/webdav', server));
