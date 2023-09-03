@@ -168,19 +168,28 @@ local args = table.pack(...)
 
 local url, auth
 do
+    for i = 1, #args do
+        args[i]:gsub("(.*)=(.*)", function(k, v)
+            args[k] = v
+        end)
+    end
     if #args < 3 then
         local keys = {
-            "netmount.url",
-            "netmount.username",
-            "netmount.password",
-            "netmount.path"
+            "url",
+            "username",
+            "password",
+            "path",
+            "run"
         }
         for i = 1, #keys do
-            args[i] = settings.get(keys[i]) or args[i]
+            local key = keys[i]
+            if not args[key] then
+                args[key] = settings.get("netmount."..key)
+            end
         end
     end
     if #args < 3 then
-        print("Usage: mount <url> <username> <password> [path]")
+        print("Usage: mount [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<program>]")
         print("Or, save url, username and password using set. Ex:")
         print("set netmount.url https://netmount.example.com")
         print("setting keys are netmount.url, netmount.username, netmount.password, and netmount.path")
@@ -215,7 +224,10 @@ local function initfs(ws, syncData)
 
     local function request(data, timeout)
         assert(data.type, "Missing request type")
-        ws.send(textutils.serializeJSON(data))
+        local ok = ws.send(textutils.serializeJSON(data))
+        if not ok then
+            return false, "Request: Connection Interrupted"
+        end
         local reqres
         parallel.waitForAny(function()
             sleep(timeout or 5)
@@ -242,7 +254,7 @@ local function initfs(ws, syncData)
 
     local function handleStream(chunks, totalChunks, func)
         local threads = {}
-        local lastChunk, attempts = os.epoch(), 0
+        local lastChunk, attempts, lastErr = os.epoch(), 0, "Unknown"
         -- 3 request attempts, retries if no chunks are sent in a 5 seconds interval
         while #chunks < totalChunks and attempts < 3 do
             for chunk = 0, totalChunks - 1 do
@@ -250,7 +262,8 @@ local function initfs(ws, syncData)
                     while not chunks[chunk + 1] do
                         local s, e = func(chunk)
                         if not s then
-                            return s, e
+                            lastErr = e
+                            return
                         end
                     end
                     lastChunk = os.epoch()
@@ -270,7 +283,7 @@ local function initfs(ws, syncData)
         end
 
         if attempts == 3 then
-            return false, "Chunk request attempt limit reached"
+            return false, "Attempt limit reached: "..lastErr
         else
             return true
         end
@@ -306,13 +319,19 @@ local function initfs(ws, syncData)
             local chunks = {}
             local suc, err = handleStream(chunks, data.chunks, function(chunk)
                 local header = " " .. data.uuid .. " " .. chunk
-                ws.send("1" .. header, true)
-                streamListen(data.uuid, chunk, function(response)
+                local ok1 = ws.send("1" .. header, true)
+                if not ok then
+                    return false, "Chunk Request: Connection Interrupted"
+                end
+                return streamListen(data.uuid, chunk, function(response)
                     chunks[chunk + 1] = response.data
-                    ws.send("2" .. header, true)
+                    local ok2 = ws.send("2" .. header, true)
+                    if not ok2 then
+                        return false, "Chunk Confirm: Connection Interrupted"
+                    end
                     lastChunk = os.epoch()
+                    return true
                 end)
-                return true
             end)
             if suc then
                 return true, table.concat(chunks)
@@ -336,7 +355,10 @@ local function initfs(ws, syncData)
         local suc, err = handleStream(chunks, totalChunks, function(chunk)
             streamListen(uuid, chunk, function(res)
                 local schunk = contents:sub((chunkSize * chunk)+1, (chunkSize * (chunk + 1)))
-                ws.send(table.concat({"0", uuid, chunk, schunk}, " "), true)
+                local ok1 = ws.send(table.concat({ "0", uuid, chunk, schunk }, " "), true)
+                if not ok1 then
+                    return false, "Chunk Send: Connection Interrupted"
+                end
                 streamListen(uuid, chunk, function(response)
                     if response.success then
                         chunks[chunk + 1] = true
@@ -354,7 +376,8 @@ local function initfs(ws, syncData)
             end)
         else
             err = (err or "Reason unknown")
-            ws.send("3 "..uuid.." "..err, true)
+            ws.send("3 " .. uuid .. " " .. err, true)
+            -- Could error check send at this point, but we've already errored...
             error("Write stream error: "..err)
         end
     end
@@ -800,12 +823,24 @@ local function setup()
     http.websocketAsync(url, auth)
     local out
     parallel.waitForAny(function()
+        local ws
         while true do
             local eventData = { os.pullEventRaw() }
             local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
             if event == "websocket_success" and wsurl == url then
-                local ws = eventData[1]
-                local res = unserializeJSON(ws.receive(5))
+                ws = eventData[1]
+                local send, close = ws.send, ws.close
+                ws.send = function(data, binary)
+                    local ret = table.pack(pcall(send, data, binary))
+                    if table.remove(ret, 1) then
+                        return table.unpack(ret)
+                    end
+                end
+                ws.close = function()
+                    pcall(close)
+                end
+            elseif event == "websocket_message" and wsurl == url and ws then
+                local res = unserializeJSON(table.remove(eventData, 1))
                 if res and res.ok and res.type == "hello" then
                     local syncData = res.data
                     out = { true, ws.close, syncData, initfs(ws, syncData) }
@@ -890,8 +925,8 @@ if suc then
         term.setTextColor(colors.green)
         print(netroot)
         term.setTextColor(colors.white)
-        if #args > 0 then
-            shell.run(table.unpack(args))
+        if args.run then
+            shell.run(args.run)
         else
             shell.run("shell")
         end
