@@ -836,6 +836,7 @@ local function initfs(netutils, syncData)
 end
 
 -- [[ Main Program / Connection handlers ]] --
+local wsclose
 
 local function pcwrap(f)
     return function(...)
@@ -897,6 +898,7 @@ local function persist()
             ws.close = function()
                 pcall(close)
             end
+            wsclose = ws.close
             local netutils = createNetutils(ws)
             local ok, syncDataU = netutils.readStream({
                 ok = true,
@@ -912,7 +914,7 @@ local function persist()
                 error("Hello Stream: " .. syncData)
             end
         elseif event == "websocket_closed" and wsurl == url then
-            isMounted = false
+            isMounted, wsclose = false, nil
             attempts = attempts + 1
             if attempts == 3 then
                 error("Socket connection failed after 3 attempts")

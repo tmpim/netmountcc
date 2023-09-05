@@ -186,7 +186,6 @@ export class WriteFileStream extends WriteStream {
             } else {
                 debug('saving buffer')
                 const realpath = this.fs.join(this.path)
-                debug(this.buffer)
                 await fsp.mkdir(pathlib.dirname(realpath), { recursive: true })
                 await fsp.writeFile(realpath, this.buffer, { encoding: 'binary' })
                 this.ws.send(this.serialize(4, JSON.stringify({
