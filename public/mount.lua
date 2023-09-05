@@ -216,7 +216,7 @@ local function toNetRoot(path)
 end
 
 -- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
-local chunkSize, chunkTimeout = 2^16, 3600*20*10
+local chunkSize, chunkTimeout = (2^16)-10, 3600*20*10
 
 local function createNetutils(ws)
     local function request(data, timeout, noSend)
@@ -837,135 +837,107 @@ end
 
 -- [[ Main Program / Connection handlers ]] --
 
-local function setup()
-    http.websocketAsync(url, auth)
-    local out
-    parallel.waitForAny(function()
-        while true do
-            local eventData = { os.pullEventRaw() }
-            local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
-            if event == "websocket_success" and wsurl == url then
-                local ws = eventData[1]
-                local send, close = ws.send, ws.close
-                ws.send = function(data, binary)
-                    local ok = pcall(send, data, binary)
-                    return ok
-                end
-                ws.close = function()
-                    pcall(close)
-                end
-                local netutils = createNetutils(ws)
-                local ok, syncData = netutils.readStream({
-                    ok = true,
-                    type = "hello"
-                }, true)
-                syncData = unserializeJSON(syncData)
-                if ok and syncData then
-                    out = { true, ws.close, syncData, initfs(netutils, syncData) }
-                elseif ok and not syncData then
-                    out = { false, "Hello Stream: Failed to parse JSON"}
-                else
-                    out = { false, "Hello Stream: " .. syncData }
-                end
-                return
-            elseif event == "websocket_closed" and wsurl == url then
-                out = { false, "Closed: "..(eventData[2] or "unknown code") .. ": " .. (eventData[1] or "unknown reason") }
-                return
-            elseif event == "websocket_failure" and wsurl == url then
-                out = { false, "Failed: "..(eventData[1] or "unknown reason") }
-                return
-            end
+local function pcwrap(f)
+    return function(...)
+        local res = table.pack(pcall(f, ...))
+        if table.remove(res, 1) then
+            return table.unpack(res)
+        else
+            ofs.open("debug.txt", "w")
+            ofs.writeLine(table.remove(res, 1))
+            ofs.close()
         end
-    end, function()
-        sleep(5)
-    end)
-    if out then
-        return table.unpack(out)
-    else
-        return false, "Timeout"
     end
 end
 
-local suc, wsclose, syncData, fs = setup()
-if suc then
-    local function pcwrap(f)
-        return function(...)
-            local res = table.pack(pcall(f, ...))
-            if table.remove(res, 1) then
-                return table.unpack(res)
-            else
-                ofs.open("debug.txt", "w")
-                ofs.writeLine(table.remove(res, 1))
-                ofs.close()
+local function sync()
+    while true do
+        local _, wsurl, sres = os.pullEventRaw("websocket_message")
+        if wsurl == url and sres then
+            local json = unserializeJSON(sres)
+            if json and json.type == "sync" and json.data and syncData then
+                syncData.contents[json.data.path] = json.data.attributes or nil
+                syncData.capacity = json.data.capacity
             end
         end
     end
+end
 
-    local function sync()
-        while true do
-            local _, wsurl, sres = os.pullEventRaw("websocket_message")
-            if wsurl == url and sres then
-                local json = unserializeJSON(sres)
-                if json and json.type == "sync" and json.data and syncData then
-                    syncData.contents[json.data.path] = json.data.attributes or nil
-                    syncData.capacity = json.data.capacity
-                end
-            end
-        end
-    end
-
-    local function close()
-        while true do
-            local _, wsurl, reason, code = os.pullEventRaw("websocket_closed")
-            if wsurl == url then
-                for attempts = 0, 3 do
-                    suc, wsclose, syncData, fs = setup()
-                    if suc then
-                        _G.fs = fs
-                        break
-                    elseif not suc then
-                        sleep(2)
-                    elseif attempts == 3 then
-                        return
-                    end
-                end
-            end
-        end
-    end
-
-    local function subshell()
-        term.clear()
-        term.setCursorPos(1, 1)
-        term.setTextColor(colors.lightBlue)
-        write(url)
-        term.setTextColor(colors.white)
-        write(" mounted to ")
-        term.setTextColor(colors.green)
-        print(netroot)
-        term.setTextColor(colors.white)
-        if args.run then
-            shell.run(args.run)
-        else
-            shell.run("shell")
-        end
-    end
-
-    _G.fs = fs
-    local ok, err = pcall(parallel.waitForAny, sync, subshell, close)
-    if ok then
-        if type(wsclose) == "function" then
-            wsclose()
-        else
-            printError("Websocket closed: "..(wsclose or "reason unknown"))
-            print("Press any key to continue")
-            os.pullEvent("key")
-        end
+local function subshell()
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.lightBlue)
+    write(url)
+    term.setTextColor(colors.white)
+    write(" mounted to ")
+    term.setTextColor(colors.green)
+    print(netroot)
+    term.setTextColor(colors.white)
+    if args.run then
+        shell.run(args.run)
     else
-        printError(err)
+        shell.run("shell")
+    end
+end
+
+local function persist()
+    http.websocketAsync(url, auth)
+    local attempts, isMounted = 0, false
+    while true do
+        local eventData = { os.pullEventRaw() }
+        local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
+        if event == "websocket_success" and wsurl == url then
+            attempts = 0
+            local ws = eventData[1]
+            local send, close = ws.send, ws.close
+            ws.send = function(data, binary)
+                local ok = pcall(send, data, binary)
+                return ok
+            end
+            ws.close = function()
+                pcall(close)
+            end
+            local netutils = createNetutils(ws)
+            local ok, syncDataU = netutils.readStream({
+                ok = true,
+                type = "hello"
+            }, true)
+            local syncData = unserializeJSON(syncDataU)
+            if ok and syncData then
+                _G.fs = initfs(netutils, syncData)
+                isMounted = true
+            elseif ok and not syncData then
+                error("Hello Stream: Failed to parse JSON")
+            else
+                error("Hello Stream: " .. syncData)
+            end
+        elseif event == "websocket_closed" and wsurl == url then
+            isMounted = false
+            attempts = attempts + 1
+            if attempts == 3 then
+                error("Socket connection failed after 3 attempts")
+            else
+                sleep(2)
+                http.websocketAsync(url, auth)
+            end
+        elseif event == "websocket_failure" and wsurl == url then
+            error("Failed: " .. (eventData[1] or "unknown reason"))
+        end
+    end
+end
+
+local pok, err = pcall(parallel.waitForAny, persist, sync, subshell)
+if pok then
+    if type(wsclose) == "function" then
+        wsclose()
+    else
+        printError("Websocket closed: " .. (wsclose or "reason unknown"))
         print("Press any key to continue")
         os.pullEvent("key")
     end
-    _G.fs = ofs
 else
-    printError("Setup "..(wsclose or "reason unknown"))
+    printError(err)
+    print("Press any key to continue")
+    os.pullEvent("key")
 end
+_G.fs = ofs

@@ -113,7 +113,7 @@ class ReadStream extends Stream {
                     return
                 }
                 const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1))).toString("binary")
-                this.ws.send(this.serialize(0, res.chunk, subchunk), {binary: true}) // may need to wrap serialize in binary buffer.
+                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk), "binary"), {binary: true})
                 debug(`sent chunk ${res.chunk}`)
             }
         }
