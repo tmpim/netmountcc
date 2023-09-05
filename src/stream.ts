@@ -3,13 +3,12 @@ import fsp from 'fs/promises';
 import pathlib from 'path';
 import {WebSocket, RawData} from 'ws'
 import { NetFS } from './fs';
-import { debug } from './debug';
+import { replacer, debug } from './util';
 
 const chunkSize = Math.pow(2, 16);
 
 class Stream {
     readonly uuid: string;
-    protected readonly path: string;
     protected readonly ws: WebSocket;
     protected readonly fs: NetFS;
 
@@ -24,7 +23,7 @@ class Stream {
         if (args.length == 0) {
             out += " "
         } else {
-            args.forEach((str) => out += " " + str)
+            args.forEach((str) => { out += " " + str })
         }
         return out;
     }
@@ -82,39 +81,39 @@ class Stream {
         return undefined;
     }
 
-    constructor(uuid: string, path: string, ws: WebSocket, fs: NetFS) {
+    constructor(uuid: string, ws: WebSocket, fs: NetFS) {
         this.uuid = uuid
-        this.path = path;
         this.ws = ws;
         this.fs = fs;
     }
 }
 
-export class ReadStream extends Stream {
-    readonly data = fsp.readFile(this.fs.join(this.path), { encoding: 'binary' })
+class ReadStream extends Stream {
+    protected data: Promise<string>
 
     async getChunkTotal() {
         return Math.ceil((await this.data).length/chunkSize)
     }
 
-    async run() {
+    async run(next?: () => void) {
         const data = Buffer.from(await this.data, "binary")
         const chunkTotal = await this.getChunkTotal()
         let total = 0;
 
         const listener = (rawdata: RawData, binary: boolean) => {
-            const res = this.unserialize(rawdata.toString())
+            const res = this.unserialize(rawdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined) {
                 if (res.success) {
                     total++;
                     if (total == chunkTotal) {
                         debug(`sending complete`)
                         this.ws.removeListener("message", listener)
+                        if (next) next()
                     }
                     return
                 }
-                const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1)))
-                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk.toString("binary")), "binary"), {binary: true})
+                const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1))).toString("binary")
+                this.ws.send(this.serialize(0, res.chunk, subchunk), {binary: true}) // may need to wrap serialize in binary buffer.
                 debug(`sent chunk ${res.chunk}`)
             }
         }
@@ -122,15 +121,31 @@ export class ReadStream extends Stream {
         this.ws.on("message", listener)
     }
 
-    constructor(path: string, ws: WebSocket, fs: NetFS) {
-        super(v4(), path, ws, fs)
+    constructor(ws: WebSocket, fs: NetFS) {
+        super(v4(), ws, fs)
     }
 }
 
-export class WriteStream extends Stream {
-    protected readonly chunkTotal: number;
+export class ReadFileStream extends ReadStream {
+    constructor(path: string, ws: WebSocket, fs: NetFS) {
+        super(ws, fs)
+        this.data = fsp.readFile(this.fs.join(path), { encoding: 'binary' })
+    }
+}
 
-    async run() {
+export class ReadObjectStream extends ReadStream {
+    constructor(data: object, ws: WebSocket, fs: NetFS) {
+        super(ws, fs)
+        const out = JSON.stringify(data, replacer)
+        this.data = new Promise((resolve) => { resolve(out) })
+    }
+}
+
+class WriteStream extends Stream {
+    protected readonly chunkTotal: number;
+    protected buffer: Buffer // Does not exist until write is complete
+
+    async run(next?: ()=>void) {
         let chunks: Buffer[] = [];
         let total = 0;
         const listener = async (wsdata: RawData, binary: boolean) => {
@@ -142,23 +157,9 @@ export class WriteStream extends Stream {
                 this.ws.send(this.serialize(2, res.chunk), {binary: true})
             }
             if (total == this.chunkTotal) {
+                this.buffer = Buffer.concat(chunks)
                 this.ws.removeListener("message", listener)
-                let size = 0;
-                chunks.forEach((buf: Buffer) => size += buf.length)
-                const capinfo = await this.fs.getCapacity()
-                if (capinfo[0]-size <= 0) {
-                    debug('out of space')
-                    this.ws.send(this.serialize(3, "Out of space"))
-                } else {
-                    debug('saving chunks')
-                    const realpath = this.fs.join(this.path)
-                    await fsp.mkdir(pathlib.dirname(realpath), { recursive: true })
-                    await fsp.writeFile(realpath, chunks, { encoding: 'binary' })
-                    this.ws.send(this.serialize(4, JSON.stringify({
-                        path: this.path,
-                        attributes: await this.fs.getAttributes(realpath)
-                    })))
-                }
+                if (next) next()
             }
         }
         this.ws.on("message", listener)
@@ -167,8 +168,37 @@ export class WriteStream extends Stream {
         }
     }
 
-    constructor(uuid: string, path: string, chunks: number, ws: WebSocket, fs: NetFS) {
-        super(uuid, path, ws, fs)
-        this.chunkTotal = chunks
+    constructor( uuid: string, chunkTotal: number, ws: WebSocket, fs: NetFS) {
+        super(uuid, ws, fs)
+        this.chunkTotal = chunkTotal
+    }
+}
+
+export class WriteFileStream extends WriteStream {
+    readonly path: string;
+
+    async run() {
+        super.run(async () => {
+            const capinfo = await this.fs.getCapacity()
+            if (capinfo[0]-this.buffer.length <= 0) {
+                debug('out of space')
+                this.ws.send(this.serialize(3, "Out of space"))
+            } else {
+                debug('saving buffer')
+                const realpath = this.fs.join(this.path)
+                debug(this.buffer)
+                await fsp.mkdir(pathlib.dirname(realpath), { recursive: true })
+                await fsp.writeFile(realpath, this.buffer, { encoding: 'binary' })
+                this.ws.send(this.serialize(4, JSON.stringify({
+                    path: this.path,
+                    attributes: await this.fs.getAttributes(realpath)
+                })))
+            }
+        })
+    }
+
+    constructor(path: string, uuid: string, chunkTotal: number, ws: WebSocket, fs: NetFS) {
+        super(uuid, chunkTotal, ws, fs)
+        this.path = path
     }
 }

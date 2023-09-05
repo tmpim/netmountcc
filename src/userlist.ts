@@ -1,9 +1,9 @@
 import pathlib from 'path';
 import fsp from 'fs/promises';
-import { IUser, PhysicalFileSystem, SimplePathPrivilegeManager, WebDAVServer } from 'webdav-server/lib/index.v2';
+import { IUser, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
 import { NetFS } from './fs';
-import { v2 as webdav } from 'webdav-server'
-import { CustomSimpleUserManager, PerUserFileSystem, UserListStorageManager } from './webdav';
+import { CustomSimpleUserManager } from './webdav';
+import { debug } from './util';
 
 export class Config {
     readonly limit!: number
@@ -98,6 +98,7 @@ export class UserList {
         if (auth) {
             const b64auth = (auth || '').split(' ')[1] || ''
             const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':')
+            debug(`attempting login as ${login}`)
             for (const user of this.users) {
                 if (user.authenticate(login, password)) {
                     return user;

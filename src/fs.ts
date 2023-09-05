@@ -3,10 +3,10 @@ import express from 'express';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
-import { WriteStream, ReadStream } from './stream'
+import { WriteFileStream, ReadFileStream, ReadObjectStream } from './stream'
 import { WebSocket } from 'ws'
 import { User } from './userlist'
-import { debug } from './debug'
+import { replacer, debug } from './util';
 
 const dirSize = async (dir: string): Promise<number> => {
     try {
@@ -51,14 +51,6 @@ export class Attributes {
 }
 
 type WatcherCallback = (path: string, attributes: Attributes | false) => void
-
-function replacer(key: any, value: any) {
-    if(value instanceof Map) {
-        return Object.fromEntries(value);
-    } else {
-        return value;
-    }
-}
 
 export class NetFS {
     readonly user: User;
@@ -268,7 +260,7 @@ export class NetFS {
                     })
                 }
             }
-            const writeStream = new WriteStream(data.uuid, data.path, data.chunks, ws, this)
+            const writeStream = new WriteFileStream(data.path, data.uuid, data.chunks, ws, this)
             send({
                 ok: true,
                 type: "writeFile",
@@ -287,7 +279,7 @@ export class NetFS {
                     err: "/" + data.path + ": No such file"
                 })
             }
-            const readStream = new ReadStream(data.path, ws, this)
+            const readStream = new ReadFileStream(data.path, ws, this)
             await readStream.run()
             send({
                 ok: true,
@@ -369,12 +361,17 @@ export class NetFS {
         let clearUpdateListener: () => void;
         const setup = async () => {
             // hello!
+            const helloStream = new ReadObjectStream({
+                contents: this.getContents(),
+                capacity: await this.getCapacity()
+            }, ws, this)
+            await helloStream.run()
             send({
                 ok: true,
                 type: "hello",
                 data: {
-                    contents: this.getContents(),
-                    capacity: await this.getCapacity()
+                    uuid: helloStream.uuid,
+                    chunks: await helloStream.getChunkTotal()
                 }
             })
 

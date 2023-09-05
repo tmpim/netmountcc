@@ -37,7 +37,7 @@ import { join as pathJoin } from 'path'
 import { XMLElement } from 'xml-js-builder'
 import { User, UserList } from "./userlist";
 import * as fs from 'fs'
-import { debug } from "./debug";
+import { debug } from './util';
 
 export class CustomSimpleUserManager implements ITestableUserManager, IListUserManager
 {

@@ -5,7 +5,7 @@ import 'dotenv/config'
 import chokidar from 'chokidar'
 import { v2 as webdav } from 'webdav-server'
 import { UserList, Config } from './userlist';
-import { debug } from './debug';
+import { debug } from './util';
 import { PerUserFileSystem, UserListStorageManager } from './webdav';
 
 const app = expressWs(express()).app

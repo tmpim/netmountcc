@@ -218,13 +218,14 @@ end
 -- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
 local chunkSize, chunkTimeout = 2^16, 3600*20*10
 
-local function initfs(ws, syncData)
-
-    local function request(data, timeout)
+local function createNetutils(ws)
+    local function request(data, timeout, noSend)
         assert(data.type, "Missing request type")
-        local ok = ws.send(textutils.serializeJSON(data))
-        if not ok then
-            return false, "Request: Connection Interrupted"
+        if not noSend then
+            local ok = ws.send(textutils.serializeJSON(data))
+            if not ok then
+                return false, "Request: Connection Interrupted"
+            end
         end
         local reqres
         parallel.waitForAny(function()
@@ -301,12 +302,8 @@ local function initfs(ws, syncData)
         end
     end
 
-    local function readStream(path)
-        local ok, data = request({
-            ok = true,
-            type = "readFile",
-            path = path
-        })
+    local function readStream(req, noSend)
+        local ok, data = request(req, nil, noSend)
         if not ok then
             return false, data
         elseif not data.uuid then
@@ -339,25 +336,19 @@ local function initfs(ws, syncData)
         end
     end
 
-    local function writeStream(path, contents)
-        local uuid = v4()
-        local totalChunks = math.max(math.ceil(#contents/chunkSize), 1)
-        local ok, data = request({
-            ok = true,
-            type = "writeFile",
-            path = path,
-            uuid = uuid,
-            chunks = totalChunks
-        })
+    local function writeStream(req, contents)
+        req.uuid = v4()
+        req.chunks = math.max(math.ceil(#contents / chunkSize), 1)
+        local ok, data = request(req)
         local chunks = {}
-        local suc, err = handleStream(chunks, totalChunks, function(chunk)
-            streamListen(uuid, chunk, function(res)
-                local schunk = contents:sub((chunkSize * chunk)+1, (chunkSize * (chunk + 1)))
-                local ok1 = ws.send(table.concat({ "0", uuid, chunk, schunk }, " "), true)
+        local suc, err = handleStream(chunks, req.chunks, function(chunk)
+            streamListen(req.uuid, chunk, function(res)
+                local schunk = contents:sub((chunkSize * chunk) + 1, (chunkSize * (chunk + 1)))
+                local ok1 = ws.send(table.concat({ "0", req.uuid, chunk, schunk }, " "), true)
                 if not ok1 then
                     return false, "Chunk Send: Connection Interrupted"
                 end
-                streamListen(uuid, chunk, function(response)
+                streamListen(req.uuid, chunk, function(response)
                     if response.success then
                         chunks[chunk + 1] = true
                         return true
@@ -369,16 +360,25 @@ local function initfs(ws, syncData)
             return true
         end)
         if suc then
-            return streamListen(uuid, nil, function(response)
+            return streamListen(req.uuid, nil, function(response)
                 return response.ok, response.err or response.data
             end)
         else
             err = (err or "Reason unknown")
             ws.send("3 " .. uuid .. " " .. err, true)
             -- Could error check send at this point, but we've already errored...
-            error("Write stream error: "..err)
+            error("Write stream error: " .. err)
         end
     end
+
+    return {
+        request = request,
+        readStream = readStream,
+        writeStream = writeStream
+    }
+end
+
+local function initfs(netutils, syncData)
 
     local fs = {}
 
@@ -541,7 +541,7 @@ local function initfs(ws, syncData)
             local net
             net, path = toNetRoot(path)
             if net then
-                local ok, err = request({
+                local ok, err = netutils.request({
                     type = name,
                     path = path
                 })
@@ -570,7 +570,7 @@ local function initfs(ws, syncData)
             pnet, path = toNetRoot(path)
             dnet, dest = toNetRoot(dest)
             if pnet and dnet then
-                local ok, err = request({
+                local ok, err = netutils.request({
                     type = name,
                     path = path,
                     dest = dest
@@ -589,7 +589,11 @@ local function initfs(ws, syncData)
                         relocate(fs.combine(netroot, dest, p), fs.combine(path, p))
                     end
                 else
-                    local ok, data = readStream(path)
+                    local ok, data = netutils.readStream({
+                        ok = true,
+                        type = "readFile",
+                        path = path
+                    })
                     if ok then
                         local file = ofs.open(dest, "wb")
                         file.write(data)
@@ -611,7 +615,11 @@ local function initfs(ws, syncData)
                     local file = ofs.open(path, "rb")
                     local data = file.readAll()
                     file.close()
-                    local ok, err = writeStream(dest, data)
+                    local ok, err = netutils.writeStream({
+                        ok = true,
+                        type = "writeFile",
+                        path = dest,
+                    }, data)
                     if ok then
                         syncData[err.path] = err.attributes
                     else
@@ -673,7 +681,11 @@ local function initfs(ws, syncData)
     local function writeHandle(path, binary, append)
         local handle, internal = genericHandle(path, binary)
         if append then
-            local ok, data = readStream(path)
+            local ok, data = netutils.readStream({
+                ok = true,
+                type = "readFile",
+                path = path
+            })
             if ok then
                 internal.buffer = data
                 internal.ibuffer = data
@@ -697,7 +709,11 @@ local function initfs(ws, syncData)
             if internal.ibuffer ~= internal.buffer then
                 internal.ibuffer = internal.buffer
                 local out = internal.buffer:gsub("\n$", "")
-                local ok, data = writeStream(path, binary and out or latinToUtf(out))
+                local ok, data = netutils.writeStream({
+                    ok = true,
+                    type = "writeFile",
+                    path = path,
+                }, binary and out or latinToUtf(out))
                 if ok then
                     syncData.contents[data.path] = data.attributes
                 else
@@ -723,7 +739,11 @@ local function initfs(ws, syncData)
 
     local function readHandle(path, binary)
         local handle, internal = genericHandle(path, binary)
-        local ok, data = readStream(path)
+        local ok, data = netutils.readStream({
+            ok = true,
+            type = "readFile",
+            path = path
+        })
         if ok then
             internal.buffer = binary and data or utfToLatin(data)
         else
@@ -821,12 +841,11 @@ local function setup()
     http.websocketAsync(url, auth)
     local out
     parallel.waitForAny(function()
-        local ws
         while true do
             local eventData = { os.pullEventRaw() }
             local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
             if event == "websocket_success" and wsurl == url then
-                ws = eventData[1]
+                local ws = eventData[1]
                 local send, close = ws.send, ws.close
                 ws.send = function(data, binary)
                     local ok = pcall(send, data, binary)
@@ -835,17 +854,20 @@ local function setup()
                 ws.close = function()
                     pcall(close)
                 end
-            elseif event == "websocket_message" and wsurl == url and ws then
-                local res = unserializeJSON(table.remove(eventData, 1))
-                if res and res.ok and res.type == "hello" then
-                    local syncData = res.data
-                    out = { true, ws.close, syncData, initfs(ws, syncData) }
-                    return
+                local netutils = createNetutils(ws)
+                local ok, syncData = netutils.readStream({
+                    ok = true,
+                    type = "hello"
+                }, true)
+                syncData = unserializeJSON(syncData)
+                if ok and syncData then
+                    out = { true, ws.close, syncData, initfs(netutils, syncData) }
+                elseif ok and not syncData then
+                    out = { false, "Hello Stream: Failed to parse JSON"}
                 else
-                    ws.close()
-                    out = { false, "Failed to complete netmount handshake" }
-                    return
+                    out = { false, "Hello Stream: " .. syncData }
                 end
+                return
             elseif event == "websocket_closed" and wsurl == url then
                 out = { false, "Closed: "..(eventData[2] or "unknown code") .. ": " .. (eventData[1] or "unknown reason") }
                 return
