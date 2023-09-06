@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
-import { Config, UserList } from "./userlist";
+import fsp from 'fs/promises';
 import path from 'path';
+import { Config, UserList } from "./userlist";
 
 export let userlist: UserList;
 
@@ -17,12 +18,50 @@ if (process.env.USERNAME && process.env.PASSWORD) {
     // Start doing stuff with the API
     const user: Map<string, Callback> = new Map()
     
-    user.set("add", (req, res) => {
+    user.set("add", async (req, res) => {
         if (req.method == 'POST' && req.body.username && req.body.password) {
             userlist.addUser(req.body.username, req.body.password, Config.restore(req.body.config))
+            try {
+                await userlist.flush()
+                res.send({
+                    ok: true
+                })
+            } catch (e) {
+                res.send({
+                    ok: false,
+                    err: e
+                })
+            }
+        } else {
             res.send({
-                ok: true
+                ok: false,
+                err: "Incorrect Method"
             })
+        }
+    })
+
+    user.set("modify", async (req, res) => {
+        if (req.method == 'POST' && req.body.username && req.body.password) {
+            const target = userlist.getUserByName(req.body.username)
+            if (target) {
+                target.config = Config.restore(req.body.config)
+                try {
+                    await userlist.flush()
+                    res.send({
+                        ok: true
+                    })
+                } catch (e) {
+                    res.send({
+                        ok: false,
+                        err: e
+                    })
+                }
+            } else {
+                res.send({
+                    ok: false,
+                    err: `No such user: ${req.body.username}`
+                })
+            }
         } else {
             res.send({
                 ok: false,
@@ -31,14 +70,22 @@ if (process.env.USERNAME && process.env.PASSWORD) {
         }
     })
     
-    user.set("remove", (req, res) => {
+    user.set("remove", async (req, res) => {
         if (req.method == 'POST') {
             const deluser = userlist.getUserByName(req.body.username)
             if (deluser) {
                 userlist.removeUser(deluser)
-                res.send({
-                    ok: true
-                })
+                try {
+                    await userlist.flush()
+                    res.send({
+                        ok: true
+                    })
+                } catch (e) {
+                    res.send({
+                        ok: false,
+                        err: e
+                    })
+                }
             } else {
                 res.send({
                     ok: false,
@@ -68,4 +115,23 @@ if (process.env.USERNAME && process.env.PASSWORD) {
     })
     
     api.set("user", user)
+
+    const drive: Map<string, Callback> = new Map()
+
+    drive.set("capacity", async (req, res) => {
+        if (req.method == 'GET') {
+            const stats = await fsp.statfs(userlist.getPath());
+            res.send({
+                ok: true,
+                capacity: [ stats.bfree * stats.bsize, stats.blocks * stats.bsize ]
+            })
+        } else {
+            res.send({
+                ok: false,
+                err: "Incorrect Method"
+            })
+        }
+    })
+
+    api.set("drive", drive)
 }

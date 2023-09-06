@@ -37,10 +37,10 @@ export class User implements IUser {
     readonly uid: string;
     readonly username: string;
     readonly password: string;
-    readonly config: Config;
     readonly netfs: NetFS;
-    isAdministrator = false;
     readonly isDefaultUser = false;
+    isAdministrator = false;
+    config: Config;
     globalConfig: Config;
 
     static restore (userlist: UserList, value: any) {
@@ -148,6 +148,11 @@ export class UserList {
                 return user
             }
         }
+    }
+
+    getPath() {
+        if (this.config.path) return this.config.path
+        return pathlib.join(process.env.MPATH || pathlib.join(__dirname, "../data"))
     }
 
     asObject() {
