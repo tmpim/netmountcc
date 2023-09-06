@@ -8,18 +8,28 @@ import { debug } from './util';
 export class Config {
     readonly limit!: number
     readonly path!: string
+    readonly isAdministrator!: boolean
 
     static restore(value: any) {
         if (value) {
-            return new Config(value.limit, value.path)
+            return new Config(value.limit, value.path, value.isAdministrator)
         } else {
             return new Config()
         }
     }
+    
+    asObject() {
+        return {
+            limit: this.limit,
+            path: this.path,
+            isAdministrator: this.isAdministrator
+        }
+    }
 
-    constructor(limit?: number, path?: string) {
+    constructor(limit?: number, path?: string, isAdministrator?: boolean) {
         if (limit) this.limit = limit
         if (path) this.path = path
+        if (isAdministrator) this.isAdministrator = isAdministrator
     }
 }
 
@@ -29,7 +39,7 @@ export class User implements IUser {
     readonly password: string;
     readonly config: Config;
     readonly netfs: NetFS;
-    readonly isAdministrator = false;
+    isAdministrator = false;
     readonly isDefaultUser = false;
     globalConfig: Config;
 
@@ -58,6 +68,14 @@ export class User implements IUser {
         if (this.globalConfig?.limit) return this.globalConfig.limit
     }
 
+    asObject() {
+        return {
+            username: this.username,
+            password: this.password,
+            config: this.config.asObject()
+        }
+    }
+
     constructor(parent: UserList, username: string, password: string, config?: Config) {
         this.username = username;
         this.password = password;
@@ -67,17 +85,16 @@ export class User implements IUser {
         } else {
             this.config = new Config()
         }
+        this.isAdministrator = this.config.isAdministrator || false
         this.uid = username
         this.netfs = new NetFS(this)
-        
-        parent.usermanager.addUser(this)
         parent.privelegeManager.setRights(this, "/", ['all'])
     }
 }
 
 export class UserList {
-    private readonly users: User[] = [];
-    readonly usermanager: CustomSimpleUserManager;
+    readonly path: string;
+    readonly users: User[] = [];
     readonly privelegeManager: SimplePathPrivilegeManager;
     config: Config;
 
@@ -111,7 +128,8 @@ export class UserList {
     removeUser(user: User) {
         const index = this.users.indexOf(user)
         if (index > -1) {
-            this.privelegeManager.setRights(this.users.splice(index, 1)[0], "/", [])
+            this.privelegeManager.setRights(user, "/", [])
+            this.users.splice(index, 1)
         }
     }
 
@@ -131,14 +149,27 @@ export class UserList {
             }
         }
     }
+
+    asObject() {
+        const uobjs: object[] = []
+        this.users.forEach((user) => uobjs.push(user.asObject()))
+        return {
+            users: uobjs,
+            config: this.config.asObject()
+        }
+    }
     
-    constructor(config?: Config) {
+    async flush() {
+        fsp.writeFile(this.path, JSON.stringify(this.asObject()))
+    }
+
+    constructor(path?: string, config?: Config) {
         if (config) {
             this.config = config
         } else {
             this.config = new Config()
         }
-        this.usermanager = new CustomSimpleUserManager()
+        this.path = path
         this.privelegeManager = new SimplePathPrivilegeManager()
     }
 }

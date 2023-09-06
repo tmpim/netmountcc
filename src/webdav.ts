@@ -41,50 +41,44 @@ import { debug } from './util';
 
 export class CustomSimpleUserManager implements ITestableUserManager, IListUserManager
 {
-    protected users : any
+    protected userlist: UserList
 
-    constructor()
+    constructor(userlist: UserList)
     {
-        this.users = {
-            __default: new SimpleUser('DefaultUser', null, false, true)
-        };
+        this.userlist = userlist
     }
 
-    getUserByName(name : string, callback : (error : Error, user ?: IUser) => void)
+    getUserByName(name : string, callback : (error : Error, user ?: User) => void)
     {
-        if(!this.users[name])
+        const user = this.userlist.getUserByName(name)
+        if(!user)
             callback(Errors.UserNotFound);
         else
-            callback(null, this.users[name]);
+            callback(null, user);
     }
-    getDefaultUser(callback : (user : IUser) => void)
+    getDefaultUser(callback : (user : User) => void)
     {
-        callback(this.users.__default);
+        callback(null);
     }
 
-    addUser(user: IUser) : IUser
+    addUser(user: User) : User
     {
-        this.users[user.uid] = user;
+        this.userlist.addUserRaw(user)
         return user;
     }
 
-    getUsers(callback : (error : Error, users : IUser[]) => void)
+    getUsers(callback : (error : Error, users : User[]) => void)
     {
-        const users = [];
-
-        for(const name in this.users)
-            users.push(this.users[name]);
-
-        callback(null, users);
+        callback(null, this.userlist.users);
     }
     
-    getUserByNamePassword(name : string, password : string, callback : (error : Error, user ?: IUser) => void) : void
+    getUserByNamePassword(name : string, password : string, callback : (error : Error, user ?: User) => void) : void
     {
         this.getUserByName(name, (e, user) => {
             if(e)
                 return callback(e);
             
-            if(user && user.password === password)
+            if(user && user.authenticate(name, password))
                 callback(null, user);
             else
                 callback(Errors.UserNotFound);

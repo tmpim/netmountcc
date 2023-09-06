@@ -2,46 +2,31 @@ import express from 'express';
 import expressWs from 'express-ws';
 import path from 'path';
 import 'dotenv/config'
-import chokidar from 'chokidar'
 import { v2 as webdav } from 'webdav-server'
-import { UserList, Config } from './userlist';
 import { debug } from './util';
-import { PerUserFileSystem, UserListStorageManager } from './webdav';
+import { CustomSimpleUserManager, PerUserFileSystem, UserListStorageManager } from './webdav';
+import { api, userlist } from './api';
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
+app.use(express.json())
 
 const luaPath =  path.join(__dirname, "../public/mount.lua")
 app.get('/mount.lua', async (req, res) => {
     res.status(200).type('text/plain').sendFile(luaPath)
 })
 
-let userlist: UserList = new UserList();
-if (process.env.USERNAME && process.env.PASSWORD) {
-    userlist.addUser(process.env.USERNAME, process.env.PASSWORD, new Config(undefined, process.env.PATH || path.join(__dirname, "../data")))
-} else if (process.env.USERLIST) {
-    let path: string = process.env.USERLIST;
-    let update = async () => {
-        try {
-            userlist.fromJSON(path)
-        } catch (e) {
-            console.log(e)
-        }
-    }
-    chokidar.watch(path).on("change", update).on("ready", update)
-}
-
 const server = new webdav.WebDAVServer({
     serverName: "netmount",
     requireAuthentification: true,
-    httpAuthentication: new webdav.HTTPBasicAuthentication(userlist.usermanager, "netmount"),
+    httpAuthentication: new webdav.HTTPBasicAuthentication(new CustomSimpleUserManager(userlist), "netmount"),
     rootFileSystem: new PerUserFileSystem(userlist),
     privilegeManager: userlist.privelegeManager,
     storageManager: new UserListStorageManager(userlist)
 })
 
 server.beforeRequest((ctx, next) => {
-    debug(` ${new Date(Date.now()).toLocaleString()} "${ctx.request.method} ${ctx.request.url}"`)
+    debug(`${new Date(Date.now()).toLocaleString()} "${ctx.request.method} ${ctx.request.url}"`)
     next()
 })
 
@@ -68,6 +53,33 @@ app.ws('/', async (ws, req) => {
         user.netfs.run(ws, req)
     } else {
         ws.close(1003, 'Authentication required.')
+    }
+})
+
+app.all("/api/:type/:action", (req, res) => {
+    const user = userlist.authenticate(req.headers.authorization)
+    if (user) {
+        if (api.has(req.params.type)) {
+            const type = api.get(req.params.type)
+            if (type.has(req.params.action)) { 
+                debug(`${user.username} requested ${req.params.type}.${req.params.action}`)
+                res.status(200)
+                type.get(req.params.action)(req, res)
+            } else {
+                res.status(200).send({
+                    ok: false,
+                    err: `No such request type ${req.params.action}`
+                })
+            }
+        } else {
+            res.status(200).send({
+                ok: false,
+                err: `No such request type ${req.params.type}`
+            })
+        }
+    } else {
+        res.setHeader("WWW-Authenticate", "Basic realm=netmount")
+        res.status(401).send('Not Authorized');
     }
 })
 
