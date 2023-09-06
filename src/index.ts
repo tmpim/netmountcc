@@ -57,8 +57,9 @@ app.ws('/', async (ws, req) => {
 })
 
 app.all("/api/:type/:action", (req, res) => {
+    debug("api request")
     const user = userlist.authenticate(req.headers.authorization)
-    if (user) {
+    if (user && user.isAdministrator) {
         if (api.has(req.params.type)) {
             const type = api.get(req.params.type)
             if (type.has(req.params.action)) { 

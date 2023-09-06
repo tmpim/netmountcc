@@ -98,8 +98,8 @@ export class UserList {
     readonly privelegeManager: SimplePathPrivilegeManager;
     config: Config;
 
-    async fromJSON(path: string) {
-        const value = JSON.parse((await fsp.readFile(path)).toString())
+    async load() {
+        const value = JSON.parse((await fsp.readFile(this.path)).toString())
         if (value.users) {
             this.config = Config.restore(value.config)
             value.users.forEach((value: any) => {
@@ -107,7 +107,6 @@ export class UserList {
                     this.addUserRaw(User.restore(this, value)!)
                 }
             })
-            // TODO: Add user removal
         }
     }
 
@@ -165,7 +164,7 @@ export class UserList {
     }
     
     async flush() {
-        fsp.writeFile(this.path, JSON.stringify(this.asObject()))
+        await fsp.writeFile(this.path, JSON.stringify(this.asObject(), null, 4))
     }
 
     constructor(path?: string, config?: Config) {
@@ -176,5 +175,6 @@ export class UserList {
         }
         this.path = path
         this.privelegeManager = new SimplePathPrivilegeManager()
+        this.load()
     }
 }
