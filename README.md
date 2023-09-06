@@ -4,6 +4,8 @@ Websocket based file transfer system for ComputerCraft.
 
 ## Connecting
 
+Netmount uses the Basic HTTP authentication scheme to secure WebSocket connections, WebDAV connections, and API calls.
+
 ### ComputerCraft
 
 Netmount ships with a client program on the URL path `/mount.lua` This is the only non-password protected resource.
@@ -83,6 +85,110 @@ They will be added to the json file like so:
 
 Users added to the JSON file once saved, assuming no syntax errors, get added without needing to restart the server. Auto removals are NYI.
 All limits and custom paths are respected by the WebDAV endpoint, no further configuration needed.
+
+### API
+
+If using the `USERLIST` environment variable, an API on the `/api` path will be added. The API is only accessible by users whose config has the `isAdmninistrator` flag set to true. All requests return a 200 status code, with an `ok` boolean in the response object to flag whether the operation really was successful. Endpoints include:
+
+#### `user/add`
+
+`POST` Add a user with the given username, password, and optional config:
+```json
+{
+    "username": "foo",
+    "password": "bar",
+    "config": {
+        "limit": 100000000
+    }
+}
+```
+Response:
+```json
+{
+    "ok": true
+}
+```
+
+#### `user/modify`
+
+`POST` Modify a users config:
+```json
+{
+    "username": "foo",
+    "config": {
+        "limit": 50000000
+    }
+}
+```
+Response:
+```json
+{
+    "ok": true
+}
+```
+
+#### `user/remove`
+
+`POST` Delete a user:
+```json
+{
+    "username": "foo"
+}
+```
+Response:
+```json
+{
+    "ok": true
+}
+```
+
+#### `user/list`
+
+`GET` List all users:
+```json
+{}
+```
+Response:
+```json
+{
+    "ok": true,
+    "users": [
+        {
+            "username": "foo",
+            "password": "bar",
+            "config": {...}
+        },
+        ...
+    ]
+}
+```
+
+#### `user/get`
+
+`GET` Get a user with the given username:
+```json
+{
+    "username": "foo"
+}
+```
+Response:
+```json
+{
+    "ok": true,
+    "user": {
+        "username": "foo",
+        "password": "bar",
+        "config": {...}
+    }
+}
+```
+
+#### `drive/capacity`
+
+`GET` Get the free and total capacity of the drive containing the data directory:
+```json
+{}
+```
 
 ## Workspace Setup
 

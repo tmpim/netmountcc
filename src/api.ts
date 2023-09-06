@@ -114,6 +114,28 @@ if (process.env.USERNAME && process.env.PASSWORD) {
             })
         }
     })
+
+    user.set("get", async (req, res) => {
+        if (req.method === 'GET') {
+            const target = userlist.getUserByName(req.body.username)
+            if (target) {
+                res.send({
+                    ok: true,
+                    user: target.asObject()
+                })
+            } else {
+                res.send({
+                    ok: false,
+                    err: `No such user: ${req.body.username}`
+                })
+            }
+        } else {
+            res.send({
+                ok: false,
+                err: "Incorrect Method"
+            })
+        }
+    })
     
     user.set("list", (req, res) => {
         if (req.method === 'GET') {

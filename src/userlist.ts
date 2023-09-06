@@ -2,7 +2,6 @@ import pathlib from 'path';
 import fsp from 'fs/promises';
 import { IUser, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
 import { NetFS } from './fs';
-import { CustomSimpleUserManager } from './webdav';
 import { debug } from './util';
 
 export class Config {
