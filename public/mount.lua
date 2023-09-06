@@ -836,7 +836,7 @@ local function initfs(netutils, syncData)
 end
 
 -- [[ Main Program / Connection handlers ]] --
-local wsclose
+local wsclose, syncData
 
 local function pcwrap(f)
     return function(...)
@@ -904,7 +904,7 @@ local function persist()
                 ok = true,
                 type = "hello"
             }, true)
-            local syncData = unserializeJSON(syncDataU)
+            syncData = unserializeJSON(syncDataU)
             if ok and syncData then
                 _G.fs = initfs(netutils, syncData)
                 isMounted = true
