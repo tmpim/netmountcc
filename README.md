@@ -31,7 +31,8 @@ For information on setting up a username and password, see [Production Setup](#p
 
 ### WebDAV
 
-Netmount also provides a WebDAV server at the `/webdav` endpoint. The same URL used as an argument in `mount.lua` gets used here.
+By default, Netmount also provides a WebDAV server at the `/webdav` endpoint. The same URL used as an argument in `mount.lua` gets used here.
+If the host has configured a custom port for webdav, it's expected that this may be at a different location.
 
 ## Configuration
 
@@ -50,6 +51,7 @@ Optional valid env values include:
  - `MPATH`: The path that the netmount should serve to/from
  - `USERLIST`: The path that the netmount should use to get multi-user information & configuration
  - `PORT`: The port on which netmount should operate on
+ - `WEBDAV_PORT`: The port on which the webdav server should operate on
 
 ### JSON File
 

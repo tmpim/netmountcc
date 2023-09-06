@@ -45,7 +45,13 @@ server.beforeRequest((ctx, next) => {
     next()
 })
 
-app.use(webdav.extensions.express('/webdav', server));
+if (process.env.WEBDAV_PORT) {
+    server.start(Number(process.env.WEBDAV_PORT), () => {
+        console.log("Netmount Webdav server started on port " + process.env.WEBDAV_PORT)
+    })
+} else {
+    app.use(webdav.extensions.express('/webdav', server));
+}
 
 app.ws('/', async (ws, req) => {
     const user = userlist.authenticate(req.headers.authorization)

@@ -104,6 +104,7 @@ export class UserList {
                     return user;
                 }
             }
+            debug(`login as ${login} failed`)
         }
     }
 
