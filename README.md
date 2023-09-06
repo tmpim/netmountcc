@@ -88,7 +88,7 @@ All limits and custom paths are respected by the WebDAV endpoint, no further con
 
 ### API
 
-If using the `USERLIST` environment variable, an API on the `/api` path will be added. The API is only accessible by users whose config has the `isAdmninistrator` flag set to true. All requests return a 200 status code, with an `ok` boolean in the response object to flag whether the operation really was successful. Endpoints include:
+If using the `USERLIST` environment variable, an API on the `/api` path will be added. The API is only accessible by users whose config has the `isAdministrator` flag set to true. All requests return a 200 status code, with an `ok` boolean in the response object to flag whether the operation really was successful. Endpoints include:
 
 #### `user/add`
 
@@ -185,9 +185,16 @@ Response:
 
 #### `drive/capacity`
 
-`GET` Get the free and total capacity of the drive containing the data directory:
+`GET` Get the free and total capacity of the drive containing the data directory, in bytes:
 ```json
 {}
+```
+Response:
+```json
+{
+    "ok": true,
+    "capacity": [ 300000, 1000000 ]
+}
 ```
 
 ## Workspace Setup
