@@ -21,7 +21,7 @@ Group=www-data
 WorkingDirectory=/var/www/netmount
 ; Create a symlink at /var/www/netmount to wherever the files are stored.
 
-ExecStart=/usr/bin/node bin/index.js
+ExecStart=/usr/bin/bun bin/index.js
 ; ExecReload=/bin/kill -USR1 $MAINPID
 
 ; Use graceful shutdown with a reasonable timeout

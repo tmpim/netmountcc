@@ -201,12 +201,12 @@ Response:
 
 To install required packages:
 ```sh
-$ yarn
+$ bun install
 ```
 
 Then run:
 ```sh
-$ yarn run ts-node src/index.ts
+$ bun run src/index.ts
 ```
 The server runs on `localhost:4000`.
 
@@ -216,7 +216,7 @@ Follow Workspace Setup steps up until running the server.
 
 Compile project:
 ```sh
-$ tsc
+$ bun build --target=bun src/index.ts --outdir=bin
 ```
 
 For all further steps replace `SITENAME` with the domain name.
