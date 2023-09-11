@@ -317,8 +317,6 @@ export class NetFS {
     }
 
     private async onReady(callback: () => void) {
-        // Create the directory if it doesn't exist already
-        await fsp.mkdir(this.join(""), { recursive: true });
         let watcher = chokidar.watch(this.join(""), {
             alwaysStat: true,
             ignorePermissionErrors: true

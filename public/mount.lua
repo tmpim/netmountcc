@@ -163,6 +163,21 @@ do
     end
 end
 
+local function waitForAllSafe(...)
+    local tt = {}
+    for k, v in pairs(table.pack(...)) do
+        local tmax = #tt + 1
+        if type(v) == "function" then
+            tt[tmax] = v
+        end
+        if tmax % 128 == 0 then
+            parallel.waitForAll(table.unpack(tt))
+            tt = {}
+        end
+    end
+    parallel.waitForAll(table.unpack(tt))
+end
+
 -- [[ Argument Parsing ]] --
 local args = table.pack(...)
 
@@ -277,7 +292,7 @@ local function createNetutils(ws)
                 end
                 lastChunk = os.epoch()
             end, function()
-                parallel.waitForAll(table.unpack(threads))
+                waitForAllSafe(table.unpack(threads))
             end)
         end
 
@@ -315,7 +330,7 @@ local function createNetutils(ws)
             local suc, err = handleStream(chunks, data.chunks, function(chunk)
                 local header = " " .. data.uuid .. " " .. chunk
                 local ok1 = ws.send("1" .. header, true)
-                if not ok then
+                if not ok1 then
                     return false, "Chunk Request: Connection Interrupted"
                 end
                 return streamListen(data.uuid, chunk, function(response)

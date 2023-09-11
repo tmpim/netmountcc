@@ -101,9 +101,9 @@ export class UserList {
         const value = JSON.parse((await fsp.readFile(this.path)).toString())
         if (value.users) {
             this.config = Config.restore(value.config)
-            value.users.forEach((value: any) => {
+            value.users.forEach(async (value: any) => {
                 if (!this.getUserByName(value.username)) {
-                    this.addUserRaw(User.restore(this, value)!)
+                    await this.addUserRaw(User.restore(this, value)!)
                 }
             })
         }
@@ -131,12 +131,15 @@ export class UserList {
         }
     }
 
-    addUser(username: string, password: string, config?: Config): void {
+    async addUser(username: string, password: string, config?: Config): Promise<void> {
         const user = new User(this, username, password, config)
+        // Create the directory if it doesn't exist already
+        await fsp.mkdir(user.netfs.join(""), { recursive: true });
         this.users.push(user)
     }
 
-    addUserRaw(user: User): void {
+    async addUserRaw(user: User): Promise<void> {
+        await fsp.mkdir(user.netfs.join(""), { recursive: true });
         this.users.push(user)
     }
 

@@ -22,7 +22,7 @@ if (process.env.USERNAME && process.env.PASSWORD) {
     user.set("add", async (req, res) => {
         if (req.method === 'POST') {
             if (req.body.username && req.body.password) {
-                userlist.addUser(req.body.username, req.body.password, Config.restore(req.body.config))
+                await userlist.addUser(req.body.username, req.body.password, Config.restore(req.body.config))
                 try {
                     await userlist.flush()
                     res.send({
