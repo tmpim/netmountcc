@@ -216,7 +216,7 @@ Follow Workspace Setup steps up until running the server.
 
 Compile project:
 ```sh
-$ bun build --target=bun src/index.ts --outdir=bin
+$ bun run build
 ```
 
 For all further steps replace `SITENAME` with the domain name.

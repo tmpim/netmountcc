@@ -5,13 +5,15 @@
   "main": "index.js",
   "author": "hugeblank",
   "license": "MIT",
+  "scripts": {
+    "build": "bun build --target=bun src/index.ts --outdir=bin"
+  },
   "dependencies": {
     "bun": "^1.0.0",
     "chokidar": "^3.5.3",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-ws": "^5.0.2",
-    "node": "^20.6.0",
     "uuid": "^9.0.0",
     "webdav-server": "^2.6.2"
   },
@@ -22,6 +24,7 @@
     "@types/express-ws": "^3.0.1",
     "@types/node": "^20.5.9",
     "@types/uuid": "^9.0.2",
+    "bun-types": "^1.0.1",
     "typescript": "^5.2.2"
   }
 }
