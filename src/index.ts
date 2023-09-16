@@ -1,20 +1,19 @@
 import express from 'express';
-import expressWs from 'express-ws';
+import expressWs from 'bun-express-ws';
+import { wsIncomingMessage } from 'bun-express-ws/src/type';
 import path from 'path';
 import 'dotenv/config'
 import { v2 as webdav } from 'webdav-server'
 import { debug } from './util';
 import { CustomSimpleUserManager, PerUserFileSystem, UserListStorageManager } from './webdav';
 import { api, userlist } from './api';
+import fsp from 'fs/promises';
 
 const app = expressWs(express()).app
 app.enable("trust proxy")
 app.use(express.json())
 
-const luaPath =  path.join(__dirname, "../public/mount.lua")
-app.get('/mount.lua', async (req, res) => {
-    res.status(200).type('text/plain').sendFile(luaPath)
-})
+const mountLuaFile = fsp.readFile(path.join(__dirname, "../public/mount.lua"))
 
 const server = new webdav.WebDAVServer({
     serverName: "netmount",
@@ -38,17 +37,16 @@ if (process.env.WEBDAV_PORT) {
     app.use(webdav.extensions.express('/webdav', server));
 }
 
-app.ws('/', async (ws, req) => {
+app.ws('/', async (ws: WebSocket, req: wsIncomingMessage) => {
     const user = userlist.authenticate(req.headers.authorization)
     if (user) {
         // heartbeat
         const beat = setInterval(() => {
             ws.ping()
         }, 1000 * 20)
-        ws.on("close", () => {
+        ws.addEventListener("close", () => {
             clearInterval(beat)
         })
-
         // run netmount fs
         user.netfs.run(ws, req)
     } else {

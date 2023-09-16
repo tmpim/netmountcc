@@ -1,7 +1,7 @@
 import { v4 } from 'uuid'
 import fsp from 'fs/promises';
 import pathlib from 'path';
-import {WebSocket, RawData} from 'ws'
+import { WebSocket } from 'ws'
 import { NetFS } from './fs';
 import { replacer, debug } from './util';
 
@@ -100,25 +100,25 @@ class ReadStream extends Stream {
         const chunkTotal = await this.getChunkTotal()
         let total = 0;
 
-        const listener = (rawdata: RawData, binary: boolean) => {
-            const res = this.unserialize(rawdata.toString("binary"))
+        const listener = (event: MessageEvent<string | Buffer>) => {
+            const res = this.unserialize(event.data.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined) {
                 if (res.success) {
                     total++;
                     if (total == chunkTotal) {
                         debug(`sending complete`)
-                        this.ws.removeListener("message", listener)
+                        this.ws.removeEventListener("message", listener)
                         if (next) next()
                     }
                     return
                 }
                 const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1))).toString("binary")
-                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk), "binary"), {binary: true})
+                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk), "binary"))
                 debug(`sent chunk ${res.chunk}`)
             }
         }
 
-        this.ws.on("message", listener)
+        this.ws.addEventListener("message", listener)
     }
 
     constructor(ws: WebSocket, fs: NetFS) {
@@ -148,23 +148,23 @@ class WriteStream extends Stream {
     async run(next?: ()=>void) {
         let chunks: Buffer[] = [];
         let total = 0;
-        const listener = async (wsdata: RawData, binary: boolean) => {
-            const res = this.unserialize(wsdata.toString("binary"))
+        const listener = async (event: MessageEvent< string | Buffer >) => {
+            const res = this.unserialize(event.data.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
                 debug(`got chunk ${res.chunk}`)
                 chunks[res.chunk] = Buffer.from(res.data, 'binary')
                 total++;
-                this.ws.send(this.serialize(2, res.chunk), {binary: true})
+                this.ws.send(this.serialize(2, res.chunk))
             }
             if (total == this.chunkTotal) {
                 this.buffer = Buffer.concat(chunks)
-                this.ws.removeListener("message", listener)
+                this.ws.removeEventListener("message", listener)
                 if (next) next()
             }
         }
-        this.ws.on("message", listener)
+        this.ws.addEventListener("message", listener)
         for (let chunk = 0; chunk < this.chunkTotal; chunk++) {
-            this.ws.send(this.serialize(1, chunk), {binary: true})
+            this.ws.send(this.serialize(1, chunk))
         }
     }
 

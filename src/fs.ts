@@ -1,5 +1,4 @@
 import pathlib from 'path';
-import express from 'express';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
 import fsp from 'fs/promises';
@@ -7,6 +6,7 @@ import { WriteFileStream, ReadFileStream, ReadObjectStream } from './stream'
 import { WebSocket } from 'ws'
 import { User } from './userlist'
 import { replacer, debug } from './util';
+import { wsIncomingMessage } from 'bun-express-ws/src/type';
 
 const dirSize = async (dir: string): Promise<number> => {
     try {
@@ -346,12 +346,12 @@ export class NetFS {
         }
     }
 
-    async run(ws: WebSocket, req: express.Request) {
-        debug(`Connection established by ${this.user.username} on ${req.ip}. Connection number ${this.connections+1}`)
+    async run(ws: WebSocket, req: wsIncomingMessage) {
+        debug(`Connection established by ${this.user.username} on ${req.connection.remoteAddress}. Connection number ${this.connections+1}`)
         const send = (data: object) => {
             const out = JSON.stringify(data, replacer)
             if (out.length < 256) {
-                debug(`to ${this.user.username} on ${req.ip}: ${out}`)
+                debug(`to ${this.user.username} on ${req.connection.remoteAddress}: ${out}`)
             }
             ws.send(out)
         }
@@ -375,7 +375,7 @@ export class NetFS {
 
             // sync relay
             clearUpdateListener = this.onUpdate(async (path: string, attributes: false | Attributes) => {
-                debug("sync", path, req.ip)
+                debug("sync", path, req.connection.remoteAddress)
                 send({
                     ok: true,
                     type: "sync",
@@ -397,13 +397,13 @@ export class NetFS {
 
         this.connections++;
 
-        ws.on("message", async (data, binary) => {
+        ws.addEventListener("message", async ({ data }) => {
             try {
                 let content = JSON.parse(data.toString());
                 if (content.type) {
                     const method = this.methods.get(content.type)
                     if (method) {
-                        debug(`from ${this.user.username} on ${req.ip}: ${data}`)
+                        debug(`from ${this.user.username} on ${req.connection.remoteAddress}: ${data}`)
                         try {
                             await method(content, send, ws)
                         } catch (e) {
@@ -426,8 +426,8 @@ export class NetFS {
                 // Could be a read/write stream blob. Just ignore.
             }
         })
-        ws.on("close", (code, reason) => {
-            debug(`Connection closed by ${this.user.username} on ${req.ip}. ${code}: ${reason || "unknown"}. Connections remaining: ${this.connections-1}`)
+        ws.addEventListener("close", ({ code, reason }) => {
+            debug(`Connection closed by ${this.user.username} on ${req.connection.remoteAddress}. ${code}: ${reason || "unknown"}. Connections remaining: ${this.connections-1}`)
             this.connections--;
             if (clearUpdateListener) clearUpdateListener();
             if (this.closeWatcher && this.connections == 0) {
@@ -444,6 +444,7 @@ export class NetFS {
     }
 
     async getCapacity(): Promise<number[]> {
+        debug(fsp)
         const stats = await fsp.statfs(this.join(""));
         let size = stats.blocks * stats.bsize
         let free = stats.bfree * stats.bsize
