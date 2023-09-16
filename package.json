@@ -1,10 +1,13 @@
 {
   "name": "ccmount",
   "version": "1.0.0",
-  "description": "Server side of ccmount",
-  "main": "index.js",
+  "description": "Websocket based file transfer system for ComputerCraft",
+  "main": "src/index.js",
   "author": "hugeblank",
   "license": "MIT",
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
     "chokidar": "^3.5.3",
     "dotenv": "^16.3.1",

@@ -216,7 +216,7 @@ Follow Workspace Setup steps up until running the server.
 
 Compile project:
 ```sh
-$ tsc
+$ yarn run build
 ```
 
 For all further steps replace `SITENAME` with the domain name.
