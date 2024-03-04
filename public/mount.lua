@@ -35,38 +35,6 @@ do
     end
 end
 
-local latinToUtf, utfToLatin
-do
-    local normal = {}
-    local toUtf = {}
-    local toLatin = {}
-    for i=0,127 do normal[string.char(i)] = true end
-    for i=128,191 do toUtf[string.char(i)] = "\194"..string.char(i) ; toLatin[string.char(i)] = string.char(i+64)  end
-    for i=192,255 do toUtf[string.char(i)] = "\195"..string.char(i-64) end
-
-    function latinToUtf(data)
-        return string.gsub(data,"[\128-\255]",toUtf)
-    end
-
-    local nMode = 0
-    local function processChar(a)
-        if normal[a] then nMode = 0 return a
-        elseif nMode == 0 then
-            if a == "\194" then nMode = 2 return ""
-            elseif a == "\195" then nMode = 3 return ""
-            end
-        elseif nMode == 2 then nMode = 0 return a
-        elseif nMode == 3 then nMode = 0 return toLatin[a]
-        end
-        return "?"
-    end
-
-    function utfToLatin(data)
-        nMode = 0
-        return string.gsub(data,".",processChar)
-    end
-end
-
 local v4
 do
     local dashes = {
@@ -382,6 +350,7 @@ local function createNetutils(ws)
             err = (err or "Reason unknown")
             ws.send("3 " .. uuid .. " " .. err, true)
             -- Could error check send at this point, but we've already errored...
+            pcall(ws.close)
             error("Write stream error: " .. err)
         end
     end
@@ -728,7 +697,7 @@ local function initfs(netutils, syncData)
                     ok = true,
                     type = "writeFile",
                     path = path,
-                }, binary and out or latinToUtf(out))
+                }, out)
                 if ok then
                     syncData.contents[data.path] = data.attributes
                 else
@@ -760,7 +729,7 @@ local function initfs(netutils, syncData)
             path = path
         })
         if ok then
-            internal.buffer = binary and data or utfToLatin(data)
+            internal.buffer = data
         else
             error("Read stream error: "..data)
         end
