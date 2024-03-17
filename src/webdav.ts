@@ -188,7 +188,7 @@ export class PerUserFileSystem extends FileSystem {
         }
 
         return {
-            realPath: pathJoin(bPath, sPath.substr(1)),
+            realPath: pathJoin(bPath, sPath.substring(1)),
             resource: this.resources[sPath]
         };
     }

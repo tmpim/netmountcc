@@ -5,3 +5,4 @@ yarn-error.log
 yarn.lock
 .vscode
 .env
+*.code-workspace

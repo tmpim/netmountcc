@@ -1,5 +1,4 @@
-local ofs = assert(_G.fs, "-eh?")
--- TODO: use API
+local expect = require("cc.expect")
 
 -- [[ Utility functions ]] --
 local b64e
@@ -147,62 +146,10 @@ local function waitForAllSafe(...)
     parallel.waitForAll(table.unpack(tt))
 end
 
--- [[ Argument Parsing ]] --
-local args = table.pack(...)
-
-local url, auth
-do
-    for i = 1, #args do
-        args[i]:gsub("(.*)=(.*)", function(k, v)
-            args[k] = v
-        end)
-    end
-    if #args < 3 then
-        local keys = {
-            "url",
-            "username",
-            "password",
-            "path",
-            "run"
-        }
-        for i = 1, #keys do
-            local key = keys[i]
-            if not args[key] then
-                args[key] = settings.get("netmount."..key)
-            end
-        end
-    end
-    if not (args.username and args.url) then
-        print("Usage: mount [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<program>]")
-        print("Or, save url, username and password using set. Ex:")
-        print("set netmount.url https://netmount.example.com")
-        print("setting keys are netmount.url, netmount.username, netmount.password, and netmount.path")
-        return
-    end
-    auth = { Authorization = "Basic " .. b64e(args.username .. ":" .. args.password) }
-    url = args.url:gsub("^http", "ws")
-end
-
-local netroot = fs.combine(args.path or "net")
-assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
-
-local function toNetRoot(path)
-    path = ofs.combine(path)
-    local nreplaced
-    path, nreplaced = path:gsub("^" .. netroot .. "/", "")
-    if path == netroot then
-        return true, ""
-    elseif path == netroot or nreplaced == 1 then
-        return true, path
-    else
-        return false, path
-    end
-end
-
--- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
+-- [[ Websocket Request/Response Functions ]] --
 local chunkSize, chunkTimeout = (2^16)-10, 3600*20*10
 
-local function createNetutils(ws)
+local function createServerConnection(ws, url)
     --- Gets a basic response from the server determined by the given request.
     ---@param data table
     ---@param timeout integer?
@@ -240,15 +187,15 @@ local function createNetutils(ws)
 
     local function handleStream(chunks, totalChunks, func)
         local threads = {}
-        local lastChunk, attempts, lastErr = os.epoch(), 0, "Unknown"
-        -- 3 request attempts, retries if no chunks are sent in a 5 seconds interval
-        while #chunks < totalChunks and attempts < 3 do
+        local lastChunk, attempts, errors = os.epoch(), 0, {}
+        -- 3 request attempts, retries if no chunks are sent in a 5 second interval
+        while #chunks < totalChunks do
             for chunk = 0, totalChunks - 1 do
                 threads[chunk + 1] = function()
                     while not chunks[chunk + 1] do
                         local s, e = func(chunk)
                         if not s then
-                            lastErr = e
+                            errors[#errors+1] = "Chunk "..tostring(chunk).." "..(tostring(e) or "Unknown error occured")
                             return
                         end
                     end
@@ -266,13 +213,14 @@ local function createNetutils(ws)
             end, function()
                 waitForAllSafe(table.unpack(threads))
             end)
+
+            if attempts == 3 then
+                return false, "Attempt limit reached", errors
+            else
+                return true
+            end
         end
 
-        if attempts == 3 then
-            return false, "Attempt limit reached: "..lastErr
-        else
-            return true
-        end
     end
 
     local function streamListen(uuid, chunk, func)
@@ -299,7 +247,7 @@ local function createNetutils(ws)
             return false, "Missing chunk total"
         else
             local chunks = {}
-            local suc, err = handleStream(chunks, data.chunks, function(chunk)
+            local suc, err, errs = handleStream(chunks, data.chunks, function(chunk)
                 local header = " " .. data.uuid .. " " .. chunk
                 ws.send("1" .. header, true)
                 return streamListen(data.uuid, chunk, function(response)
@@ -312,7 +260,7 @@ local function createNetutils(ws)
             if suc then
                 return true, table.concat(chunks)
             else
-                error("Read stream error: "..(err or "Reason unknown"))
+                error("Read stream error, "..(err or "Reason unknown")..":\n"..table.concat(errs or {}, "\n", 1, 5))
             end
         end
     end
@@ -322,11 +270,11 @@ local function createNetutils(ws)
         req.chunks = math.max(math.ceil(#contents / chunkSize), 1)
         local ok, data = request(req)
         local chunks = {}
-        local suc, err = handleStream(chunks, req.chunks, function(chunk)
-            streamListen(req.uuid, chunk, function(res)
+        local suc, err, errs = handleStream(chunks, req.chunks, function(chunk)
+            return streamListen(req.uuid, chunk, function(res)
                 local schunk = contents:sub((chunkSize * chunk) + 1, (chunkSize * (chunk + 1)))
                 ws.send(table.concat({ "0", req.uuid, chunk, schunk }, " "), true)
-                streamListen(req.uuid, chunk, function(response)
+                return streamListen(req.uuid, chunk, function(response)
                     if response.success then
                         chunks[chunk + 1] = true
                         return true
@@ -335,7 +283,6 @@ local function createNetutils(ws)
                     end
                 end)
             end)
-            return true
         end)
         if suc then
             return streamListen(req.uuid, nil, function(response)
@@ -345,8 +292,7 @@ local function createNetutils(ws)
             err = (err or "Reason unknown")
             ws.send("3 " .. req.uuid .. " " .. err, true)
             -- Could error check send at this point, but we've already errored...
-            pcall(ws.close)
-            error("Write stream error: " .. err)
+            error("Write stream error, "..err..":\n"..table.concat(errs or {}, "\n", 1, 5))
         end
     end
 
@@ -357,24 +303,138 @@ local function createNetutils(ws)
     }
 end
 
-local function initfs(netutils, syncData)
+-- [[ Main API ]] --
 
-    local fs = {}
+--- @class NetmountState
+--- @field server table
+--- @field attributes {contents: table<string, table>, capacity: number[]}
+--- @field credentials {url: string, username:string, auth: table<string, string>}
+--- @field close function
+
+
+---@class NetMountAPI
+local nm = {}
+
+--- Create a netmount connection state. Attempts connection once, returns the state object if successful, or false and an error string if not.
+---@param url string
+---@param username string
+---@param password string
+---@return false|NetmountState
+---@return string?
+nm.createState = function(url, username, password)
+    local credentials = {
+        url = url:gsub("^http", "ws"),
+        username = username,
+        auth = { Authorization = "Basic " .. b64e(username .. ":" .. password) }
+    }
+    http.websocketAsync(credentials.url, credentials.auth)
+    while true do
+        local eventData = { os.pullEventRaw() }
+        local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
+        if event == "websocket_success" and wsurl == credentials.url then
+
+            local ws = table.remove(eventData, 1)
+            local server = createServerConnection(ws, credentials.url)
+
+            local ok, syncDataU = server.readStream({
+                ok = true,
+                type = "hello"
+            }, true)
+            local syncData = unserializeJSON(syncDataU)
+            if ok and not syncData then
+                error("Hello Stream: Failed to parse JSON")
+            elseif not ok then
+                error("Hello Stream: " .. syncDataU)
+            end
+
+            local state = {
+                server = server,
+                attributes = syncData,
+                credentials = credentials,
+                close = ws.close
+            }
+            return state
+        elseif event == "websocket_closed" and wsurl == credentials.url then
+            return false, "Connection closed"
+        elseif event == "websocket_failure" and wsurl == credentials.url then
+            return false, (eventData[1] or "Unknown reason")
+        end
+    end
+end
+
+--- Get a sync handler function for the given state.
+--- This handler MUST be run in parallel any other functions or programs that will be utilizing netmount.
+--- Additionally it MUST be run immediately after the connection has been established in order not to
+---@param state NetmountState
+---@return function
+nm.getSyncHandler = function(state)
+    return function()
+        while true do
+            local e, wsurl, sres = os.pullEventRaw("websocket_message")
+            if wsurl == state.credentials.url and sres then
+                local json = unserializeJSON(sres)
+                if json and json.type == "sync" and json.data and state.attributes then
+                    state.attributes.contents[json.data.path] = json.data.attributes or nil
+                    state.attributes.capacity = json.data.capacity
+                end
+            end
+        end
+    end
+end
+
+--- Get a connection handler for the given state.
+--- This is can optionally be put in parallel with your program and the sync handler
+--- Will attempt to reconnect with the netmount server after a disconnect, repairing the state object in the process.
+--- If the connection fails maxAttempts times in a row (default: 3), the connection handler errors. Set to 0 to disable.
+---@param state NetmountState
+---@param maxAttempts integer
+---@return function
+nm.getConnectionHandler = function(state, maxAttempts)
+    maxAttempts = maxAttempts or 3
+    local attempts = 0
+    return function ()
+        while true do
+            local eventData = { os.pullEventRaw() }
+            local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
+            if event == "websocket_success" and wsurl == state.credentials.url then
+                attempts = 0
+                local ws = table.remove(eventData, 1)
+                local server = createServerConnection(ws)
+                local ok, syncDataU = server.readStream({
+                    ok = true,
+                    type = "hello"
+                }, true)
+                local attributes = unserializeJSON(syncDataU)
+                if not attributes or not ok then
+                    attempts = attempts + 1
+                end
+                state.server = server
+                state.attributes = attributes
+                state.close = ws.close
+            elseif event == "websocket_closed" and wsurl == state.credentials.url then
+                attempts = attempts + 1
+                if attempts == maxAttempts then
+                    error("Socket connection failed after"..tostring(maxAttempts).."attempts")
+                else
+                    sleep(2)
+                    http.websocketAsync(state.credentials.url, state.credentials.auth)
+                end
+            elseif event == "websocket_failure" and wsurl == state.credentials.url then
+                attempts = attempts + 1
+            end
+        end
+    end
+end
+
+--- Create a file system-like API for the given state.
+---@param state NetmountState
+---@return table
+nm.createFs = function(state)
+
+    local api = {}
 
     local function getAttributes(path)
-        return syncData.contents[path]
-    end
-
-    local function isDriveRoot(path)
-        if toNetRoot(path) then
-            if #path == 0 then
-                return true
-            else
-                return false
-            end
-        else
-            return ofs.isDriveRoot(path)
-        end
+        return state.attributes.contents[path]
     end
 
     -- [[ Functions that can be directly ripped from old fs API ]] --
@@ -385,127 +445,87 @@ local function initfs(netutils, syncData)
     }
 
     for _, fn in ipairs(copyold) do
-        fs[fn] = ofs[fn]
+        api[fn] = fs[fn]
     end
 
     -- [[ Overrides ]] --
 
-    fs.list = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local attrs = syncData.contents[path]
-            if attrs and attrs.isDir then
-                local out = {}
-                for fullpath in pairs(syncData.contents) do
-                    local dir = fs.getDir(fullpath)
-                    if dir == path then
-                        out[#out + 1] = fs.getName(fullpath)
-                    end
+    api.list = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local attrs = state.attributes.contents[path]
+        if attrs and attrs.isDir then
+            local out = {}
+            for fullpath in pairs(state.attributes.contents) do
+                local dir = api.getDir(fullpath)
+                if dir == path then
+                    out[#out + 1] = api.getName(fullpath)
                 end
-                return out
-            else
-                error(fs.combine(netroot, path)..": Not a directory")
             end
+            return out
         else
-            local list = ofs.list(path)
-            if #path == 0 then
-                list[#list + 1] = netroot
-            end
-            return list
+            error(path .. ": Not a directory")
         end
     end
 
-    fs.attributes = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local attributes = getAttributes(path)
-            if attributes then
-                return getAttributes(path)
-            else
-                error(fs.combine(netroot, path)..": No such file ")
-            end
+    api.attributes = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local attributes = getAttributes(path)
+        if attributes then
+            return attributes
         else
-            return ofs.attributes(path)
+            error(path .. ": No such file")
         end
     end
 
-    fs.exists = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            return getAttributes(path) and true or false
+    api.exists = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        return getAttributes(path) and true or false
+    end
+
+    api.isDir = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local attributes = getAttributes(path)
+        return (attributes and attributes.isDir) and true or false
+    end
+
+    api.isReadOnly = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local attributes = getAttributes(path)
+        return (attributes and attributes.isReadOnly) and true or false
+    end
+
+    api.getDrive = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        return "netmount"
+    end
+
+    api.getSize = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local attributes = getAttributes(path)
+        if attributes then
+            return attributes.size
         else
-            return ofs.exists(path)
+            error(path .. ": No such file ")
         end
     end
 
-    fs.isDir = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local attributes = getAttributes(path)
-            return (attributes and attributes.isDir) and true or false
-        else
-            return ofs.isDir(path)
-        end
+    api.getFreeSpace = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        return state.attributes.capacity[1]
     end
 
-    fs.isReadOnly = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local attributes = getAttributes(path)
-            return (attributes and attributes.isReadOnly) and true or false
-        else
-            return ofs.isReadOnly(path)
-        end
-    end
-
-    fs.getDrive = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            return "net"
-        else
-            return ofs.getDrive(path)
-        end
-    end
-
-    fs.getSize = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local attributes = getAttributes(path)
-            if attributes then
-                return attributes.size
-            else
-                error(fs.combine(netroot, path) .. ": No such file ")
-            end
-        else
-            return ofs.getSize(path)
-        end
-    end
-
-    fs.getFreeSpace = function(path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            return syncData.capacity[1]
-        else
-            return ofs.getFreeSpace(path)
-        end
-    end
-
-    fs.getCapacity = function (path)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            return syncData.capacity[2]
-        else
-            return ofs.getCapacity(path)
-        end
+    api.getCapacity = function(path)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        return state.attributes.capacity[2]
     end
 
     -- [[ Network Dependent Overrides ]] --
@@ -516,21 +536,17 @@ local function initfs(netutils, syncData)
     }
 
     for _, name in ipairs(singleOverrides) do
-        fs[name] = function(path)
-            local net
-            net, path = toNetRoot(path)
-            if net then
-                local ok, err = netutils.request({
-                    type = name,
-                    path = path
-                })
-                if ok then
-                    syncData.contents[err.path] = err.attributes or nil
-                else
-                    error(err)
-                end
+        api[name] = function(path)
+            expect(1, path, "string")
+            path = fs.combine(path)
+            local ok, err = state.server.request({
+                type = name,
+                path = path
+            })
+            if ok then
+                state.attributes.contents[err.path] = err.attributes or nil
             else
-                return ofs[name](path)
+                error(err)
             end
         end
     end
@@ -541,83 +557,26 @@ local function initfs(netutils, syncData)
     }
 
     for _, name in ipairs(doubleOverrides) do
-
-        ---comment
-        ---@param path string
-        ---@param dest string
-        ---@return function?
-        ---@return string?
         local function relocate(path, dest)
-            if fs.exists(dest) then
-                error("/"..fs.combine(dest)..": File exists")
+            expect(1, path, "string")
+            expect(2, dest, "string")
+            path, dest = fs.combine(path), fs.combine(dest)
+            if api.exists(dest) then
+                error("/"..dest..": File exists")
             end
-            local pnet, dnet
-            pnet, path = toNetRoot(path)
-            dnet, dest = toNetRoot(dest)
-            if pnet and dnet then
-                local ok, err = netutils.request({
-                    type = name,
-                    path = path,
-                    dest = dest
-                })
-                if ok then
-                    syncData.contents[err.path] = err.attributes or nil
-                else
-                    error(err)
-                end
-            elseif not (pnet or dnet) then
-                ofs[name](path, dest)
-            elseif pnet and not dnet then -- from server to client
-                if fs.isDir(fs.combine(netroot, dest)) then
-                    local list = fs.list(fs.combine(netroot, dest))
-                    for _, p in ipairs(list) do
-                        relocate(fs.combine(netroot, dest, p), fs.combine(path, p))
-                    end
-                else
-                    local ok, data = netutils.readStream({
-                        ok = true,
-                        type = "readFile",
-                        path = path
-                    })
-                    if ok then
-                        local file = assert(ofs.open(dest, "wb"), "Failed to open file, "..dest)
-                        file.write(data)
-                        file.close()
-                    else
-                        error("Read stream error: "..data)
-                    end
-                    if name == "move" then
-                        return fs.delete, fs.combine(netroot, path)
-                    end
-                end
-            else -- from client to server
-                if fs.isDir(path) then
-                    local list = fs.list(path)
-                    for _, p in ipairs(list) do
-                        relocate(fs.combine(path, p), fs.combine(netroot, dest, p))
-                    end
-                else
-                    local file = assert(ofs.open(path, "rb"), "Failed to open file, "..path)
-                    local data = file.readAll()
-                    file.close()
-                    local ok, err = netutils.writeStream({
-                        ok = true,
-                        type = "writeFile",
-                        path = dest,
-                    }, data)
-                    if ok then
-                        syncData[err.path] = err.attributes
-                    else
-                        error("Write stream error: "..data)
-                    end
-                end
-                if name == "move" then
-                    return ofs.delete, path
-                end
+            local ok, err = state.server.request({
+                type = name,
+                path = path,
+                dest = dest
+            })
+            if ok then
+                state.attributes.contents[err.path] = err.attributes or nil
+            else
+                error(err)
             end
         end
 
-        fs[name] = function(path, dest)
+        api[name] = function(path, dest)
             local func, p = relocate(path, dest)
             if func then
                 func(p)
@@ -637,6 +596,7 @@ local function initfs(netutils, syncData)
 
         if binary then
             handle.seek = function(whence, offset)
+                assert(not internal.closed, "attempt to use a closed file")
                 if not offset then
                     offset = 0
                 end
@@ -666,7 +626,7 @@ local function initfs(netutils, syncData)
     local function writeHandle(path, binary, append)
         local handle, internal = genericHandle(path, binary)
         if append then
-            local ok, data = netutils.readStream({
+            local ok, data = state.server.readStream({
                 ok = true,
                 type = "readFile",
                 path = path
@@ -681,10 +641,10 @@ local function initfs(netutils, syncData)
         end
 
         handle.write = function(text)
+            assert(not internal.closed, "attempt to use a closed file")
             if type(text) == "table" then
                 text = string.char(table.unpack(text))
             end
-            assert(not internal.closed, "attempt to use a closed file")
             internal.buffer = internal.buffer:sub(0, internal.pos) .. text .. internal.buffer:sub(internal.pos+#text+1, -1)
             internal.pos = internal.pos + #text
         end
@@ -694,13 +654,13 @@ local function initfs(netutils, syncData)
             if internal.ibuffer ~= internal.buffer then
                 internal.ibuffer = internal.buffer
                 local out = internal.buffer:gsub("\n$", "")
-                local ok, data = netutils.writeStream({
+                local ok, data = state.server.writeStream({
                     ok = true,
                     type = "writeFile",
                     path = path,
                 }, out)
                 if ok then
-                    syncData.contents[data.path] = data.attributes
+                    state.attributes.contents[data.path] = data.attributes
                 else
                     error("Write stream error: "..(data or "Unknown"))
                 end
@@ -724,7 +684,7 @@ local function initfs(netutils, syncData)
 
     local function readHandle(path, binary)
         local handle, internal = genericHandle(path, binary)
-        local ok, data = netutils.readStream({
+        local ok, data = state.server.readStream({
             ok = true,
             type = "readFile",
             path = path
@@ -769,31 +729,27 @@ local function initfs(netutils, syncData)
         return handle
     end
 
-    fs.open = function(path, mode)
-        local net
-        net, path = toNetRoot(path)
-        if net then
-            local b = mode:sub(2, 2)
-            local binary = (b == "b")
-            if #mode > 2 and (b and not binary) then
-                error("Unsupported mode")
-            end
-            local left = mode:sub(1, 1)
-            if left == "w" then
-                return writeHandle(path, binary)
-            elseif left == "r" then
-                return readHandle(path, binary)
-            elseif left == "a" then
-                return writeHandle(path, binary, true)
-            else
-                error("Unsupported mode")
-            end
+    api.open = function(path, mode)
+        expect(1, path, "string")
+        path = fs.combine(path)
+        local b = mode:sub(2, 2)
+        local binary = b == "b"
+        if #mode > 2 and (b and not binary) then
+            error("Unsupported mode")
+        end
+        local left = mode:sub(1, 1)
+        if left == "w" then
+            return writeHandle(path, binary)
+        elseif left == "r" then
+            return readHandle(path, binary)
+        elseif left == "a" then
+            return writeHandle(path, binary, true)
         else
-            return ofs.open(path, mode)
+            error("Unsupported mode")
         end
     end
 
-    do
+    do -- Hack fs API definition to use our custom API.
         local romfs, i = "", 1
         for line in io.lines("rom/apis/fs.lua") do
             -- Rip out definition weirdness
@@ -806,104 +762,16 @@ local function initfs(netutils, syncData)
         for k, f in pairs(_ENV) do
             if f == _ENV then
                 f = env
-            else
-                env[k] = f
             end
+            env[k] = f
         end
-        env.fs = fs
+        env.fs = api
         setmetatable(env, {__index = _G})
 
         assert(pcall(assert(load(romfs, "romfsapi", nil, env))))
-        fs.isDriveRoot = isDriveRoot
     end
 
-    return fs
+    return api
 end
 
--- [[ Main Program / Connection handlers ]] --
-local wsclose, syncData
-
-local function sync()
-    while true do
-        local _, wsurl, sres = os.pullEventRaw("websocket_message")
-        if wsurl == url and sres then
-            local json = unserializeJSON(sres)
-            if json and json.type == "sync" and json.data and syncData then
-                syncData.contents[json.data.path] = json.data.attributes or nil
-                syncData.capacity = json.data.capacity
-            end
-        end
-    end
-end
-
-local function subshell()
-    term.clear()
-    term.setCursorPos(1, 1)
-    term.setTextColor(colors.lightBlue)
-    write(url)
-    term.setTextColor(colors.white)
-    write(" mounted to ")
-    term.setTextColor(colors.green)
-    print(netroot)
-    term.setTextColor(colors.white)
-    if args.run then
-        shell.run(args.run)
-    else
-        shell.run("shell")
-    end
-end
-
-local function persist()
-    http.websocketAsync(url, auth)
-    local attempts, isMounted = 0, false
-    while true do
-        local eventData = { os.pullEventRaw() }
-        local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
-        if event == "websocket_success" and wsurl == url then
-            attempts = 0
-            local ws = table.remove(eventData, 1) ---@type WebSocketHandle
-            wsclose = ws.close
-            local netutils = createNetutils(ws)
-            local ok, syncDataU = netutils.readStream({
-                ok = true,
-                type = "hello"
-            }, true)
-            syncData = unserializeJSON(syncDataU)
-            if ok and syncData then
-                _G.fs = initfs(netutils, syncData)
-                isMounted = true
-            elseif ok and not syncData then
-                error("Hello Stream: Failed to parse JSON")
-            else
-                error("Hello Stream: " .. syncData)
-            end
-        elseif event == "websocket_closed" and wsurl == url then
-            isMounted, wsclose = false, nil
-            attempts = attempts + 1
-            if attempts == 3 then
-                error("Socket connection failed after 3 attempts")
-            else
-                sleep(2)
-                http.websocketAsync(url, auth)
-            end
-        elseif event == "websocket_failure" and wsurl == url then
-            error("Failed: " .. (eventData[1] or "unknown reason"))
-        end
-    end
-end
-
-local pok, err = pcall(parallel.waitForAny, persist, sync, subshell)
-if pok then
-    if type(wsclose) == "function" then
-        wsclose()
-    else
-        printError("Websocket closed: " .. (wsclose or "reason unknown"))
-        print("Press any key to continue")
-        os.pullEvent("key")
-    end
-else
-    printError(err)
-    print("Press any key to continue")
-    os.pullEvent("key")
-end
-_G.fs = ofs
+return nm

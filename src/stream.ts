@@ -12,12 +12,12 @@ class Stream {
     protected readonly ws: WebSocket;
     protected readonly fs: NetFS;
 
-    protected serialize(id: 0, chunk: number, data: string): string
-    protected serialize(id: 1, chunk: number): string
-    protected serialize(id: 2, chunk: number): string
-    protected serialize(id: 3, reason: string): string
-    protected serialize(id: 3): string
-    protected serialize(id: 4, json: string): string
+    protected serialize(id: 0, chunk: number, data: string): string // Send chunk data
+    protected serialize(id: 1, chunk: number): string // Request this chunk for writing
+    protected serialize(id: 2, chunk: number): string // Confirm chunk was received
+    protected serialize(id: 3, reason: string): string // Send error
+    protected serialize(id: 3): string // Send error (with no reason)
+    protected serialize(id: 4, json: string): string // Send written file attributes
     protected serialize(id: number, ...args: any[]): string {
         let out = id.toString() + " " + this.uuid
         if (args.length == 0) {
@@ -148,7 +148,7 @@ class WriteStream extends Stream {
     async run(next?: ()=>void) {
         let chunks: Buffer[] = [];
         let total = 0;
-        const listener = async (wsdata: RawData, binary: boolean) => {
+        const listener = async (wsdata: RawData, binary: boolean) => { // TODO: Add timeout & error transmission
             const res = this.unserialize(wsdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
                 debug(`got chunk ${res.chunk}`)

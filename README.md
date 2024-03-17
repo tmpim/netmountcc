@@ -8,6 +8,8 @@ Netmount uses the Basic HTTP authentication scheme to secure WebSocket connectio
 
 ### ComputerCraft
 
+#### mount.lua
+
 Netmount ships with a client program on the URL path `/mount.lua` This is the only non-password protected resource.
 To use, on a CC Computer run:
 ```sh
@@ -30,6 +32,29 @@ where:
 - `run` - the chosen program to run after netmount loads
 
 For information on setting up a username and password, see [Production Setup](#production-setup)
+
+#### API
+
+In addition to `mount.lua`, a more programmatic method of using netmount is provided on the URL path: `/api.lua`.
+An example script outlining its basic functionality:
+```lua
+-- The api.lua file is well documented, please check it out if you're confused.
+-- Replace localhost:4000 with your netmount provider!
+local url = "http://localhost:4000/"
+local handle = http.get(url.."api.lua") -- Get the latest version of the API
+local _, nm = assert(pcall(assert(load(handle.readAll(), "nmapi", nil, _ENV)))) -- Quickly read, load, and execute in a very dumb way
+handle.close() -- Close handle responsibly
+state = nm.createState(url, settings.get("netmount.username"), settings.get("netmount.password")) -- Create a netmount "state" from the URL, username, and password
+-- The state consists of the users credentials, the attributes of all files on the netmount server, and a few functions to transmit and receive messages from the server.
+_G.nm = nm -- Expose the netmount API for tinkering
+_G.state = state -- Expose the netmount user state for tinkering
+_G.nfs = nm.createFs(state) -- Create a clone of the fs API, with the root being the root of your netmount user directory.
+-- Note that unlike mount.lua this API only works on the remote files. You can't move or copy files locally without creating a remote and a local handle using fs.open (and nfs.open).
+parallel.waitForAny(function() shell.run("lua") end, nm.getSyncHandler(state), nm.getConnectionHandler(state)) -- Run the lua program for tinkering in parallel with a syncHandler and connectionHandler.
+-- The sync handler is a function that keeps the local netmount state in sync with the remote state. This MUST be put in parallel with your code in order for netmount to work. Ideally it should be run with no yielding between the state creation and its execution.
+-- The connection handler is a function that will attempt to reconnect with the netmount server after a unexpected disconnect, repairing the state object in the process. This MAY be put in parallel with your code, netmount will work fine without it. However if the connection fails, you're responsible for creating a new state to reconnect.
+state.close() -- Close the websocket behind the state responsibly.
+```
 
 ### WebDAV
 

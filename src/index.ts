@@ -11,9 +11,12 @@ const app = expressWs(express()).app
 app.enable("trust proxy")
 app.use(express.json())
 
-const luaPath =  path.join(__dirname, "../public/mount.lua")
-app.get('/mount.lua', async (req, res) => {
-    res.status(200).type('text/plain').sendFile(luaPath)
+const files = ['mount.lua', 'api.lua']
+files.forEach((file) => {
+    const luaPath =  path.join(__dirname, "../public/", file)
+    app.get('/' + file, async (req, res) => {
+        res.status(200).type('text/plain').sendFile(luaPath)
+    })
 })
 
 const server = new webdav.WebDAVServer({
