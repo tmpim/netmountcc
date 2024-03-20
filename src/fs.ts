@@ -109,6 +109,7 @@ export class NetFS {
                         type: type,
                         err: "Trees greater than 128 directories not allowed"
                     })
+                    return
                 }
                 const { attributes: dattrs } = await this.closestAttributes(data.dest)
                 if (dattrs && dattrs.isReadOnly) {
@@ -117,12 +118,14 @@ export class NetFS {
                         type: type,
                         err: "Destination is read-only"
                     })
+                    return
                 } else if (attrs.isReadOnly && type === "move") {
                     send({
                         ok: false,
                         type: type,
                         err: "Cannot move read-only file " + data.path
                     })
+                    return
                 }
                 try {
                     await fsp.cp(path, this.join(data.dest), {
@@ -157,6 +160,7 @@ export class NetFS {
                     type: type,
                     err: "No such file"
                 })
+                return
             }
         }
     }
@@ -173,6 +177,7 @@ export class NetFS {
                         type: "delete",
                         err: data.path + ": Access denied"
                     })
+                    return
                 }
                 await fsp.rm(this.join(data.path), {
                     recursive: true
@@ -191,6 +196,7 @@ export class NetFS {
                     type: "delete",
                     err: "No such file"
                 })
+                return
             }
         })
         this.methods.set("makeDir", async (data: any, send: SendFunction) => {
@@ -203,6 +209,7 @@ export class NetFS {
                         type: "makeDir",
                         err: data.path + ": Access denied"
                     })
+                    return
                 } else if (!attrs.isDir) {
                     if (cpath === data.path) {
                         send({
@@ -210,12 +217,14 @@ export class NetFS {
                             type: "makeDir",
                             err: data.path + ": Destination Exists"
                         })
+                        return
                     } else {
                         send({
                             ok: false,
                             type: "makeDir",
                             err: data.path + ": Could not create directory"
                         })
+                        return
                     }
                 } else if (path.split("/").length > 128) {
                     send({
@@ -223,6 +232,7 @@ export class NetFS {
                         type: "makeDir",
                         err: "Trees greater than 128 directories not allowed"
                     })
+                    return
                 }
             } 
             await fsp.mkdir(path, { recursive: true });
@@ -241,8 +251,9 @@ export class NetFS {
                 send({
                     ok: false,
                     type: "writeFile",
-                    err: "Trees greater than 128 directories not allowed"
+                    err: "Trees greater than 128 directories from root are not allowed"
                 })
+                return
             }
             const attrs = await this.getAttributes(data.path)
             if (attrs) {
@@ -252,12 +263,14 @@ export class NetFS {
                         type: "writeFile",
                         data: "/" + data.path + ": Cannot write to directory"
                     })
+                    return
                 } else if (attrs.isReadOnly) {
                     send({
                         ok: false,
                         type: "writeFile",
                         data: "/" + data.path + ": Access denied"
                     })
+                    return
                 }
             }
             const writeStream = new WriteFileStream(data.path, data.uuid, data.chunks, ws, this)
@@ -278,6 +291,7 @@ export class NetFS {
                     type: "readFile",
                     err: "/" + data.path + ": No such file"
                 })
+                return
             }
             const readStream = new ReadFileStream(data.path, ws, this)
             await readStream.run()

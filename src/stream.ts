@@ -11,9 +11,11 @@ class Stream {
     readonly uuid: string;
     protected readonly ws: WebSocket;
     protected readonly fs: NetFS;
+    private expire: number;
+    private interval: string | number | NodeJS.Timeout;
 
     protected serialize(id: 0, chunk: number, data: string): string // Send chunk data
-    protected serialize(id: 1, chunk: number): string // Request this chunk for writing
+    protected serialize(id: 1, chunk: number): string // Request this chunk (only CC uses this because of coroutine constraints)
     protected serialize(id: 2, chunk: number): string // Confirm chunk was received
     protected serialize(id: 3, reason: string): string // Send error
     protected serialize(id: 3): string // Send error (with no reason)
@@ -82,9 +84,27 @@ class Stream {
     }
 
     constructor(uuid: string, ws: WebSocket, fs: NetFS) {
-        this.uuid = uuid
+        this.uuid = uuid;
         this.ws = ws;
         this.fs = fs;
+    }
+
+    close() {
+        clearInterval(this.interval)
+    }
+
+    resetTimeout() {
+        this.expire = Date.now() + 300000; // TODO: Increase this, and add an open stream limit.
+    }
+
+    setTimeout(next?: () => void) {
+        this.interval = setInterval(async () => {
+            if (this.expire <= Date.now()) {
+                clearInterval(this.interval)
+                if (next) next();
+                this.ws.send(this.serialize(3, "Stream timeout"))
+            }
+        }, 1000)
     }
 }
 
@@ -101,13 +121,14 @@ class ReadStream extends Stream {
         let total = 0;
 
         const listener = (rawdata: RawData, binary: boolean) => {
+            this.resetTimeout()
             const res = this.unserialize(rawdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined) {
                 if (res.success) {
                     total++;
                     if (total == chunkTotal) {
                         debug(`sending complete`)
-                        this.ws.removeListener("message", listener)
+                        this.close()
                         if (next) next()
                     }
                     return
@@ -118,7 +139,9 @@ class ReadStream extends Stream {
             }
         }
 
+        this.resetTimeout()
         this.ws.on("message", listener)
+        super.setTimeout(() => this.ws.removeListener("message", listener))
     }
 
     constructor(ws: WebSocket, fs: NetFS) {
@@ -148,7 +171,7 @@ class WriteStream extends Stream {
     async run(next?: ()=>void) {
         let chunks: Buffer[] = [];
         let total = 0;
-        const listener = async (wsdata: RawData, binary: boolean) => { // TODO: Add timeout & error transmission
+        const listener = async (wsdata: RawData, binary: boolean) => {
             const res = this.unserialize(wsdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
                 debug(`got chunk ${res.chunk}`)
@@ -158,14 +181,12 @@ class WriteStream extends Stream {
             }
             if (total == this.chunkTotal) {
                 this.buffer = Buffer.concat(chunks)
-                this.ws.removeListener("message", listener)
+                this.close()
                 if (next) next()
             }
         }
         this.ws.on("message", listener)
-        for (let chunk = 0; chunk < this.chunkTotal; chunk++) {
-            this.ws.send(this.serialize(1, chunk), {binary: true})
-        }
+        super.setTimeout(() => this.ws.removeListener("message", listener))
     }
 
     constructor( uuid: string, chunkTotal: number, ws: WebSocket, fs: NetFS) {

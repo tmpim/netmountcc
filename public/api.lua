@@ -260,7 +260,8 @@ local function createServerConnection(ws, url)
             if suc then
                 return true, table.concat(chunks)
             else
-                error("Read stream error, "..(err or "Reason unknown")..":\n"..table.concat(errs or {}, "\n", 1, 5))
+                errs = errs or {}
+                error("Read stream error, "..(err or "Reason unknown")..":\n"..table.concat(errs, "\n", 1, math.min(#errs, 5)))
             end
         end
     end
@@ -271,17 +272,15 @@ local function createServerConnection(ws, url)
         local ok, data = request(req)
         local chunks = {}
         local suc, err, errs = handleStream(chunks, req.chunks, function(chunk)
-            return streamListen(req.uuid, chunk, function(res)
-                local schunk = contents:sub((chunkSize * chunk) + 1, (chunkSize * (chunk + 1)))
-                ws.send(table.concat({ "0", req.uuid, chunk, schunk }, " "), true)
-                return streamListen(req.uuid, chunk, function(response)
-                    if response.success then
-                        chunks[chunk + 1] = true
-                        return true
-                    elseif response.err then
-                        return false, response.err
-                    end
-                end)
+            local schunk = contents:sub((chunkSize * chunk) + 1, (chunkSize * (chunk + 1)))
+            ws.send(table.concat({ "0", req.uuid, chunk, schunk }, " "), true)
+            return streamListen(req.uuid, chunk, function(response)
+                if response.success then
+                    chunks[chunk + 1] = true
+                    return true
+                elseif response.err then
+                    return false, response.err
+                end
             end)
         end)
         if suc then
@@ -363,8 +362,8 @@ nm.createState = function(url, username, password)
 end
 
 --- Get a sync handler function for the given state.
---- This handler MUST be run in parallel any other functions or programs that will be utilizing netmount.
---- Additionally it MUST be run immediately after the connection has been established in order not to
+--- This handler MUST be run in parallel to any other functions or programs that will be utilizing netmount.
+--- Additionally it MUST be run immediately after the connection has been established in order not to miss any file sync events
 ---@param state NetmountState
 ---@return function
 nm.getSyncHandler = function(state)
@@ -428,13 +427,25 @@ end
 
 --- Create a file system-like API for the given state.
 ---@param state NetmountState
+---@param mount string Vanity mount name for errors. Changes nothing functionally about input paths
+---@param streamHandlers boolean? Enable advanced stream handlers, allowing for more efficient transfer of streamed content like dfpwm.
 ---@return table
-nm.createFs = function(state)
+nm.createFs = function(state, mount, streamHandlers)
+    mount = ""
 
     local api = {}
 
     local function getAttributes(path)
         return state.attributes.contents[path]
+    end
+
+    local function prefix(path, err)
+        local out = fs.combine(mount, path)
+        if err then
+            return err:gsub(path, out)
+        else
+            return out
+        end
     end
 
     -- [[ Functions that can be directly ripped from old fs API ]] --
@@ -464,7 +475,7 @@ nm.createFs = function(state)
             end
             return out
         else
-            error(path .. ": Not a directory")
+            error(prefix(path) .. ": Not a directory")
         end
     end
 
@@ -475,7 +486,7 @@ nm.createFs = function(state)
         if attributes then
             return attributes
         else
-            error(path .. ": No such file")
+            error(prefix(path) .. ": No such file")
         end
     end
 
@@ -512,7 +523,7 @@ nm.createFs = function(state)
         if attributes then
             return attributes.size
         else
-            error(path .. ": No such file ")
+            error(prefix(path) .. ": No such file ")
         end
     end
 
@@ -546,7 +557,7 @@ nm.createFs = function(state)
             if ok then
                 state.attributes.contents[err.path] = err.attributes or nil
             else
-                error(err)
+                error(prefix(path, err))
             end
         end
     end
@@ -562,7 +573,7 @@ nm.createFs = function(state)
             expect(2, dest, "string")
             path, dest = fs.combine(path), fs.combine(dest)
             if api.exists(dest) then
-                error("/"..dest..": File exists")
+                error("/".. fs.combine(mount, path) ..": File exists")
             end
             local ok, err = state.server.request({
                 type = name,
@@ -572,7 +583,7 @@ nm.createFs = function(state)
             if ok then
                 state.attributes.contents[err.path] = err.attributes or nil
             else
-                error(err)
+                error(prefix(path, prefix(dest, err)))
             end
         end
 
@@ -585,47 +596,109 @@ nm.createFs = function(state)
     end
 
     -- [[ Network Dependent File Handles ]] --
+    local genericHandle, writeHandle, readHandle
+    if streamHandlers then
 
-    local function genericHandle(path, binary)
-        local internal = {
-            buffer = "",
-            pos = 0,
-            closed = false
-        }
-        local handle = {}
+    else
+        function genericHandle(path, binary)
+            local internal = {
+                buffer = "",
+                pos = 0,
+                closed = false
+            }
+            local handle = {}
 
-        if binary then
-            handle.seek = function(whence, offset)
-                assert(not internal.closed, "attempt to use a closed file")
-                if not offset then
-                    offset = 0
+            if binary then
+                handle.seek = function(whence, offset)
+                    assert(not internal.closed, "attempt to use a closed file")
+                    if not offset then
+                        offset = 0
+                    end
+                    if whence == "set" then
+                        internal.pos = offset
+                    elseif whence == "end" then
+                        internal.pos = #internal.buffer + offset
+                    else
+                        internal.pos = internal.pos + offset
+                    end
+                    if internal.pos < 0 then
+                        internal.pos = 0
+                        return nil, "Position is negative"
+                    end
+                    return internal.pos
                 end
-                if whence == "set" then
-                    internal.pos = offset
-                elseif whence == "end" then
-                    internal.pos = #internal.buffer + offset
-                else
-                    internal.pos = internal.pos + offset
-                end
-                if internal.pos < 0 then
-                    internal.pos = 0
-                    return nil, "Position is negative"
-                end
-                return internal.pos
             end
+
+            handle.close = function()
+                assert(not internal.closed, "attempt to use a closed file")
+                internal.closed = true
+            end
+
+            return handle, internal
         end
 
-        handle.close = function()
-            assert(not internal.closed, "attempt to use a closed file")
-            internal.closed = true
+        function writeHandle(path, binary, append)
+            local handle, internal = genericHandle(path, binary)
+            if append then
+                local ok, data = state.server.readStream({
+                    ok = true,
+                    type = "readFile",
+                    path = path
+                })
+                if ok then
+                    internal.buffer = data
+                    internal.ibuffer = data
+                    internal.pos = #data
+                else
+                    error("Read stream error: " .. data)
+                end
+            end
+
+            handle.write = function(text)
+                assert(not internal.closed, "attempt to use a closed file")
+                if type(text) == "table" then
+                    text = string.char(table.unpack(text))
+                end
+                internal.buffer = internal.buffer:sub(0, internal.pos) ..
+                text .. internal.buffer:sub(internal.pos + #text + 1, -1)
+                internal.pos = internal.pos + #text
+            end
+
+            handle.flush = function()
+                assert(not internal.closed, "attempt to use a closed file")
+                if internal.ibuffer ~= internal.buffer then
+                    internal.ibuffer = internal.buffer
+                    local out = internal.buffer:gsub("\n$", "")
+                    local ok, data = state.server.writeStream({
+                        ok = true,
+                        type = "writeFile",
+                        path = path,
+                    }, out)
+                    if ok then
+                        state.attributes.contents[data.path] = data.attributes
+                    else
+                        error("Write stream error: " .. (data or "Unknown"))
+                    end
+                end
+            end
+
+            handle.close = function()
+                assert(not internal.closed, "attempt to use a closed file")
+                handle.flush()
+                internal.closed = true
+            end
+
+            if not binary then
+                handle.writeLine = function(text)
+                    handle.write(text .. "\n")
+                end
+            end
+
+            return handle
         end
 
-        return handle, internal
-    end
-
-    local function writeHandle(path, binary, append)
-        local handle, internal = genericHandle(path, binary)
-        if append then
+        function readHandle(path, binary)
+            local handle, internal = genericHandle(path, binary)
             local ok, data = state.server.readStream({
                 ok = true,
                 type = "readFile",
@@ -633,101 +706,45 @@ nm.createFs = function(state)
             })
             if ok then
                 internal.buffer = data
-                internal.ibuffer = data
-                internal.pos = #data
             else
                 error("Read stream error: "..data)
             end
-        end
 
-        handle.write = function(text)
-            assert(not internal.closed, "attempt to use a closed file")
-            if type(text) == "table" then
-                text = string.char(table.unpack(text))
-            end
-            internal.buffer = internal.buffer:sub(0, internal.pos) .. text .. internal.buffer:sub(internal.pos+#text+1, -1)
-            internal.pos = internal.pos + #text
-        end
-
-        handle.flush = function()
-            assert(not internal.closed, "attempt to use a closed file")
-            if internal.ibuffer ~= internal.buffer then
-                internal.ibuffer = internal.buffer
-                local out = internal.buffer:gsub("\n$", "")
-                local ok, data = state.server.writeStream({
-                    ok = true,
-                    type = "writeFile",
-                    path = path,
-                }, out)
-                if ok then
-                    state.attributes.contents[data.path] = data.attributes
-                else
-                    error("Write stream error: "..(data or "Unknown"))
+            handle.read = function(count)
+                assert(not internal.closed, "attempt to use a closed file")
+                local out = internal.buffer:sub(internal.pos+1, internal.pos+count)
+                if internal.pos < #internal.buffer then
+                    internal.pos = internal.pos + #out
+                    return out
                 end
             end
-        end
 
-        handle.close = function()
-            assert(not internal.closed, "attempt to use a closed file")
-            handle.flush()
-            internal.closed = true
-        end
-
-        if not binary then
-            handle.writeLine = function(text)
-                handle.write(text.."\n")
+            handle.readLine = function(withTrailing)
+                assert(not internal.closed, "attempt to use a closed file")
+                local pos = internal.pos + 1
+                local nl = internal.buffer:sub(pos, -1):find("\n")
+                local out = internal.buffer:sub(pos, pos + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
+                local offset = #out + (withTrailing and 0 or 1)
+                if internal.pos <= #internal.buffer then
+                    internal.pos = internal.pos + offset
+                    return out
+                end
             end
-        end
 
-        return handle
+            handle.readAll = function()
+                assert(not internal.closed, "attempt to use a closed file")
+                local pos = internal.pos
+                local out = internal.buffer:sub(pos, -1)
+                if internal.pos < #internal.buffer then
+                    internal.pos = internal.pos + #out
+                    return out
+                end
+            end
+
+            return handle
+        end
     end
 
-    local function readHandle(path, binary)
-        local handle, internal = genericHandle(path, binary)
-        local ok, data = state.server.readStream({
-            ok = true,
-            type = "readFile",
-            path = path
-        })
-        if ok then
-            internal.buffer = data
-        else
-            error("Read stream error: "..data)
-        end
-
-        handle.read = function(count)
-            assert(not internal.closed, "attempt to use a closed file")
-            local out = internal.buffer:sub(internal.pos+1, internal.pos+count)
-            if internal.pos < #internal.buffer then
-                internal.pos = internal.pos + #out
-                return out
-            end
-        end
-
-        handle.readLine = function(withTrailing)
-            assert(not internal.closed, "attempt to use a closed file")
-            local pos = internal.pos + 1
-            local nl = internal.buffer:sub(pos, -1):find("\n")
-            local out = internal.buffer:sub(pos, pos + (nl or #internal.buffer + 2) - (withTrailing and 1 or 2))
-            local offset = #out + (withTrailing and 0 or 1)
-            if internal.pos <= #internal.buffer then
-                internal.pos = internal.pos + offset
-                return out
-            end
-        end
-
-        handle.readAll = function()
-            assert(not internal.closed, "attempt to use a closed file")
-            local pos = internal.pos
-            local out = internal.buffer:sub(pos, -1)
-            if internal.pos < #internal.buffer then
-                internal.pos = internal.pos + #out
-                return out
-            end
-        end
-
-        return handle
-    end
 
     api.open = function(path, mode)
         expect(1, path, "string")
