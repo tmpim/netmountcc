@@ -538,7 +538,9 @@ nm.createFs = function(state, mount, streamHandlers)
     api.getDrive = function(path)
         expect(1, path, "string")
         path = fs.combine(path)
-        return "netmount"
+        if api.isDir(path) then
+            return "netmount"
+        end
     end
 
     api.getSize = function(path)

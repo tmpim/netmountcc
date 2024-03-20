@@ -61,18 +61,6 @@ local function wrapfs()
 
     local api = {}
 
-    local function isDriveRoot(path)
-        if toNetRoot(path) then
-            if #path == 0 then
-                return true
-            else
-                return false
-            end
-        else
-            return ofs.isDriveRoot(path)
-        end
-    end
-
     -- [[ Functions that can be directly ripped from old fs API ]] --
     local copyold = {
         "combine",
@@ -90,7 +78,7 @@ local function wrapfs()
         "makeDir", "delete", "list",
         "attributes", "exists", "isDir",
         "isReadOnly", "getDrive", "getSize",
-        "getFreeSpace", "getCapacity",
+        "getFreeSpace", "getCapacity"
     }
 
     for _, name in ipairs(singleOverrides) do
@@ -198,9 +186,7 @@ local function wrapfs()
         end
         env.fs = api
         setmetatable(env, {__index = _G})
-
-        assert(pcall(assert(load(romfs, "romfsapi", nil, env))))
-        api.isDriveRoot = isDriveRoot
+        assert(pcall(assert(load(romfs, "romfsapi", nil, env)))) -- find, complete, and isDriveRoot
     end
 
     return api
