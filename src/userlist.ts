@@ -1,8 +1,10 @@
 import pathlib from 'path';
 import fsp from 'fs/promises';
 import { IUser, SimplePathPrivilegeManager } from 'webdav-server/lib/index.v2';
+import { v4 } from 'uuid'
 import { NetFS } from './fs';
 import { debug } from './util';
+import WebSocket from 'ws';
 
 export class Config {
     readonly limit!: number
@@ -96,6 +98,7 @@ export class UserList {
     readonly users: User[] = [];
     readonly privelegeManager: SimplePathPrivilegeManager;
     config: Config;
+    reserved: Map<WebSocket, string>;
 
     async load() {
         const value = JSON.parse((await fsp.readFile(this.path)).toString())
@@ -107,6 +110,39 @@ export class UserList {
                 }
             })
         }
+    }
+
+    getFreeUUID() { // Create a ws UUID that's not being used by netmount
+        let str = v4()
+        while (!this.isFreeUUID(str)) {
+            str = v4()
+        }
+        return str
+    }
+
+    isFreeUUID(str: string) {
+        for (let value in this.reserved.values()) {
+            if (value === str) {
+                return false
+            }
+        }
+        return true
+    }
+
+    lookupUUID(ws: WebSocket) {
+        return this.reserved.get(ws)
+    }
+
+    reserveUUID(ws: WebSocket, str: string) {
+        let free = this.isFreeUUID(str)
+        if (free) {
+            this.reserved.set(ws, str)
+        }
+        return free;
+    }
+
+    removeReservedUUID(ws: WebSocket) {
+        return this.reserved.delete(ws)
     }
 
     authenticate(auth: string | undefined) {
@@ -176,7 +212,10 @@ export class UserList {
             this.config = new Config()
         }
         this.path = path
+        this.reserved = new Map();
         this.privelegeManager = new SimplePathPrivilegeManager()
         this.load()
     }
 }
+
+export let userlist = new UserList(process.env.USERLIST);

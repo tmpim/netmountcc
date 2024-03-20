@@ -1,3 +1,5 @@
+import WebSocket from "ws";
+
 export function replacer(key: any, value: any) {
     if(value instanceof Map) {
         return Object.fromEntries(value);

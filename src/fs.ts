@@ -1,12 +1,13 @@
 import pathlib from 'path';
-import express from 'express';
 import chokidar from 'chokidar'
 import { Stats } from 'fs'
+import { RawData, WebSocket } from 'ws'
 import fsp from 'fs/promises';
 import { WriteFileStream, ReadFileStream, ReadObjectStream } from './stream'
-import { WebSocket } from 'ws'
 import { User } from './userlist'
 import { replacer, debug } from './util';
+import { IncomingMessage } from 'http';
+import { userlist } from "./userlist";
 
 const dirSize = async (dir: string): Promise<number> => {
     try {
@@ -360,12 +361,12 @@ export class NetFS {
         }
     }
 
-    async run(ws: WebSocket, req: express.Request) {
-        debug(`Connection established by ${this.user.username} on ${req.ip}. Connection number ${this.connections+1}`)
+    async run(ws: WebSocket, req: IncomingMessage) {
+        debug(`Connection established by ${this.user.username} on ${req.socket.remoteAddress} (${userlist.lookupUUID(ws)}). Connection number ${this.connections+1}`)
         const send = (data: object) => {
             const out = JSON.stringify(data, replacer)
             if (out.length < 256) {
-                debug(`to ${this.user.username} on ${req.ip}: ${out}`)
+                debug(`to ${this.user.username} on ${userlist.lookupUUID(ws)}: ${out}`)
             }
             ws.send(out)
         }
@@ -389,7 +390,7 @@ export class NetFS {
 
             // sync relay
             clearUpdateListener = this.onUpdate(async (path: string, attributes: false | Attributes) => {
-                debug("sync", path, req.ip)
+                debug("sync", path, userlist.lookupUUID(ws))
                 send({
                     ok: true,
                     type: "sync",
@@ -411,13 +412,13 @@ export class NetFS {
 
         this.connections++;
 
-        ws.on("message", async (data, binary) => {
-            try {
+        ws.on("message", async (data: RawData, isBinary: boolean) => {
+            if (!isBinary) { // Streams are binary, we look away
                 let content = JSON.parse(data.toString());
                 if (content.type) {
                     const method = this.methods.get(content.type)
                     if (method) {
-                        debug(`from ${this.user.username} on ${req.ip}: ${data}`)
+                        debug(`from ${this.user.username} on ${userlist.lookupUUID(ws)}: ${data}`)
                         try {
                             await method(content, send, ws)
                         } catch (e) {
@@ -436,12 +437,10 @@ export class NetFS {
                         })
                     }
                 }
-            } catch {
-                // Could be a read/write stream blob. Just ignore.
             }
         })
         ws.on("close", (code, reason) => {
-            debug(`Connection closed by ${this.user.username} on ${req.ip}. ${code}: ${reason || "unknown"}. Connections remaining: ${this.connections-1}`)
+            debug(`Connection closed by ${this.user.username} on ${req.socket.remoteAddress} (${userlist.lookupUUID(ws)}). ${code}: ${reason || "unknown"}. Connections remaining: ${this.connections-1}`)
             this.connections--;
             if (clearUpdateListener) clearUpdateListener();
             if (this.closeWatcher && this.connections == 0) {

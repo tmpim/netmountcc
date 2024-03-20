@@ -6,6 +6,7 @@ import { NetFS } from './fs';
 import { replacer, debug } from './util';
 
 const chunkSize = Math.pow(2, 16);
+const options = { binary: true}
 
 class Stream {
     readonly uuid: string;
@@ -13,6 +14,7 @@ class Stream {
     protected readonly fs: NetFS;
     private expire: number;
     private interval: string | number | NodeJS.Timeout;
+    private inext: () => void
 
     protected serialize(id: 0, chunk: number, data: string): string // Send chunk data
     protected serialize(id: 1, chunk: number): string // Request this chunk (only CC uses this because of coroutine constraints)
@@ -91,6 +93,7 @@ class Stream {
 
     close() {
         clearInterval(this.interval)
+        if (this.inext) this.inext();
     }
 
     resetTimeout() {
@@ -98,11 +101,13 @@ class Stream {
     }
 
     setTimeout(next?: () => void) {
+        this.inext = next;
         this.interval = setInterval(async () => {
             if (this.expire <= Date.now()) {
                 clearInterval(this.interval)
+                debug(`Stream ${this.uuid} timeout`)
                 if (next) next();
-                this.ws.send(this.serialize(3, "Stream timeout"))
+                this.ws.send(this.serialize(3, "Stream timeout"), options)
             }
         }, 1000)
     }
@@ -121,27 +126,32 @@ class ReadStream extends Stream {
         let total = 0;
 
         const listener = (rawdata: RawData, binary: boolean) => {
-            this.resetTimeout()
-            const res = this.unserialize(rawdata.toString("binary"))
-            if (res && res.uuid == this.uuid && res.chunk != undefined) {
-                if (res.success) {
-                    total++;
-                    if (total == chunkTotal) {
-                        debug(`sending complete`)
-                        this.close()
-                        if (next) next()
+            if (binary) {
+                this.resetTimeout()
+                const res = this.unserialize(rawdata.toString("binary"))
+                if (res && res.uuid == this.uuid && res.chunk != undefined) {
+                    if (res.success) {
+                        total++;
+                        if (total == chunkTotal) {
+                            debug(`Stream ${this.uuid} sending complete`)
+                            this.close()
+                            if (next) next()
+                        }
+                        return
                     }
-                    return
+                    const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1))).toString("binary")
+                    this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk), "binary"), options)
+                    debug(`sent chunk ${res.chunk}`)
                 }
-                const subchunk = data?.subarray(chunkSize * res.chunk, (chunkSize * (res.chunk + 1))).toString("binary")
-                this.ws.send(Buffer.from(this.serialize(0, res.chunk, subchunk), "binary"), {binary: true})
-                debug(`sent chunk ${res.chunk}`)
             }
         }
 
         this.resetTimeout()
         this.ws.on("message", listener)
-        super.setTimeout(() => this.ws.removeListener("message", listener))
+        super.setTimeout(() => {
+            this.ws.removeListener("message", listener)
+            debug(`Stream ${this.uuid} closed`)
+        })
     }
 
     constructor(ws: WebSocket, fs: NetFS) {
@@ -174,10 +184,10 @@ class WriteStream extends Stream {
         const listener = async (wsdata: RawData, binary: boolean) => {
             const res = this.unserialize(wsdata.toString("binary"))
             if (res && res.uuid == this.uuid && res.chunk != undefined && res.chunk >= 0 && res.chunk < this.chunkTotal && res.data != undefined) {
-                debug(`got chunk ${res.chunk}`)
+                debug(`Stream ${this.uuid} got chunk ${res.chunk}`)
                 chunks[res.chunk] = Buffer.from(res.data, 'binary')
                 total++;
-                this.ws.send(this.serialize(2, res.chunk), {binary: true})
+                this.ws.send(this.serialize(2, res.chunk), options)
             }
             if (total == this.chunkTotal) {
                 this.buffer = Buffer.concat(chunks)
@@ -202,17 +212,17 @@ export class WriteFileStream extends WriteStream {
         super.run(async () => {
             const capinfo = await this.fs.getCapacity()
             if (capinfo[0]-this.buffer.length <= 0) {
-                debug('out of space')
-                this.ws.send(this.serialize(3, "Out of space"))
+                debug(`Stream ${this.uuid} out of space`)
+                this.ws.send(this.serialize(3, "Out of space"), options)
             } else {
-                debug('saving buffer')
+                debug(`Stream ${this.uuid} saving buffer`)
                 const realpath = this.fs.join(this.path)
                 await fsp.mkdir(pathlib.dirname(realpath), { recursive: true })
                 await fsp.writeFile(realpath, this.buffer, { encoding: 'binary' })
                 this.ws.send(this.serialize(4, JSON.stringify({
                     path: this.path,
                     attributes: await this.fs.getAttributes(realpath)
-                })))
+                })), options)
             }
         })
     }

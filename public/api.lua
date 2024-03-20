@@ -46,7 +46,15 @@ do
     function v4()
         local out = {}
         for i = 1, 32 do
-            local val = math.random(0, 15)
+            --[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
+            local val
+            if i == 13 then
+                val = 4
+            elseif i == 17 then
+                val = math.random(8, 11)
+            else
+                val = math.random(0, 15)
+            end
             if val < 10 then
                 out[#out + 1] = val
             else
@@ -166,13 +174,19 @@ local function createServerConnection(ws, url)
             sleep(timeout or 5)
         end, function()
             while true do
-                local _, wsurl, response = os.pullEventRaw("websocket_message")
-                if wsurl == url and response then
+                local e, wsurl, response = os.pullEventRaw()
+                if e == "websocket_message" and wsurl == url and response then
                     local json = unserializeJSON(response)
                     if json and json.type == data.type then
                         reqres = json
                         return
                     end
+                elseif e == "websocket_closed" and wsurl == url then
+                    reqres = {
+                        ok = false,
+                        err = response
+                    }
+                    return
                 end
             end
         end)
@@ -261,7 +275,7 @@ local function createServerConnection(ws, url)
                 return true, table.concat(chunks)
             else
                 errs = errs or {}
-                error("Read stream error, "..(err or "Reason unknown")..":\n"..table.concat(errs, "\n", 1, math.min(#errs, 5)))
+                return false, "Read stream error, "..(err or "Reason unknown")..":\n"..table.concat(errs, "\n", 1, math.min(#errs, 5))
             end
         end
     end
@@ -321,17 +335,25 @@ local nm = {}
 ---@return false|NetmountState
 ---@return string?
 nm.createState = function(url, username, password)
-    local credentials = {
-        url = url:gsub("^http", "ws"),
+    expect(1, url, "string")
+    expect(2, username, "string")
+    expect(3, password, "string")
+    local credentials = { -- Basic Credentials object
         username = username,
         auth = { Authorization = "Basic " .. b64e(username .. ":" .. password) }
     }
-    http.websocketAsync(credentials.url, credentials.auth)
+    -- Reserve a session UUID
+    url = url:gsub("/?$", "/")
+    local uidh = assert(http.get(url .. "api/reserve/ws", credentials.auth))
+    local uid = assert(unserializeJSON(uidh.readAll()), "UUID Reserve: Failed to parse JSON")
+    uidh.close()
+    assert(uid.ok, uid.err)
+    credentials.url = url:gsub("^http", "ws")..uid.uuid -- Set the credentials URL
+    http.websocketAsync(credentials.url, credentials.auth) -- Use it to log in
     while true do
         local eventData = { os.pullEventRaw() }
         local event, wsurl = table.remove(eventData, 1), table.remove(eventData, 1)
         if event == "websocket_success" and wsurl == credentials.url then
-
             local ws = table.remove(eventData, 1)
             local server = createServerConnection(ws, credentials.url)
 
@@ -343,7 +365,7 @@ nm.createState = function(url, username, password)
             if ok and not syncData then
                 error("Hello Stream: Failed to parse JSON")
             elseif not ok then
-                error("Hello Stream: " .. syncDataU)
+                error(syncDataU)
             end
 
             local state = {
@@ -367,6 +389,7 @@ end
 ---@param state NetmountState
 ---@return function
 nm.getSyncHandler = function(state)
+    expect(1, state, "table")
     return function()
         while true do
             local e, wsurl, sres = os.pullEventRaw("websocket_message")
@@ -389,6 +412,7 @@ end
 ---@param maxAttempts integer
 ---@return function
 nm.getConnectionHandler = function(state, maxAttempts)
+    expect(1, state, "table")
     maxAttempts = maxAttempts or 3
     local attempts = 0
     return function ()
@@ -431,6 +455,7 @@ end
 ---@param streamHandlers boolean? Enable advanced stream handlers, allowing for more efficient transfer of streamed content like dfpwm.
 ---@return table
 nm.createFs = function(state, mount, streamHandlers)
+    expect(1, state, "table")
     mount = ""
 
     local api = {}

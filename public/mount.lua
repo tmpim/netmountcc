@@ -22,6 +22,7 @@ do
                 args[key] = settings.get("netmount." .. key)
             end
         end
+        args.path = args.path or "net"
     end
     if not (args.username and args.url) then
         print("Usage: mount [url=<url>] [username=<username>] [password=<password>] [path=<path>] [run=<program>]")
@@ -35,9 +36,9 @@ end
 local handle = assert(http.get(args.url:gsub("/$", "").."/api.lua"))
 local _, nm = assert(pcall(assert(load(handle.readAll(), "nmapi", nil, _ENV))))
 handle.close()
-local state = nm.createState(args.url, args.username, args.password)
+local state = assert(nm.createState(args.url, args.username, args.password))
 
-local netroot = ofs.combine(args.path or "net")
+local netroot = ofs.combine(args.path)
 assert(not ofs.exists(netroot), "Directory "..netroot.." already exists")
 
 local function toNetRoot(path)
@@ -56,7 +57,7 @@ end
 -- [[ Websocket Request/Response Function & Netmount fs Initialization ]] --
 
 local function wrapfs()
-    local nfs = nm.createFs(state)
+    local nfs = nm.createFs(state, args.path)
 
     local api = {}
 
@@ -103,7 +104,7 @@ local function wrapfs()
                 if #fs.combine(path) == 0 then
                     if name == "list" then
                         ---@cast out string[]
-                        out[#out + 1] = "net"
+                        out[#out + 1] = args.path
                         table.sort(out, function(a, b)
                             return #a < #b
                         end)
