@@ -196,6 +196,7 @@ export class PerUserFileSystem extends FileSystem {
     protected _create(path : Path, ctx : CreateInfo, _callback : SimpleCallback) : void
     {
         const { realPath } = this.getRealPath(path, ctx.context);
+        debug(`Webdav ${ctx.context.user.username} create ${realPath}`)
 
         const callback = (e: any) => {
             if(!e)
@@ -228,6 +229,7 @@ export class PerUserFileSystem extends FileSystem {
     protected _delete(path : Path, ctx : DeleteInfo, _callback : SimpleCallback) : void
     {
         const { realPath } = this.getRealPath(path, ctx.context);
+        debug(`Webdav ${ctx.context.user.username} delete ${realPath}`)
 
         const callback = (e: any) => {
             if(!e)
@@ -272,6 +274,7 @@ export class PerUserFileSystem extends FileSystem {
     protected _openWriteStream(path : Path, ctx : OpenWriteStreamInfo, callback : ReturnCallback<Writable>) : void
     {
         const { realPath, resource } = this.getRealPath(path, ctx.context);
+        debug(`Webdav ${ctx.context.user.username} write stream ${realPath}`)
 
         fs.open(realPath, 'w+', (e, fd) => {
             if(e)
@@ -287,6 +290,7 @@ export class PerUserFileSystem extends FileSystem {
     protected _openReadStream(path : Path, ctx : OpenReadStreamInfo, callback : ReturnCallback<Readable>) : void
     {
         const { realPath } = this.getRealPath(path, ctx.context);
+        debug(`Webdav ${ctx.context.user.username} read stream ${realPath}`)
 
         fs.open(realPath, 'r', (e, fd) => {
             if(e)
@@ -300,6 +304,8 @@ export class PerUserFileSystem extends FileSystem {
     {
         const { realPath: realPathFrom } = this.getRealPath(pathFrom, ctx.context);
         const { realPath: realPathTo } = this.getRealPath(pathTo, ctx.context);
+
+        debug(`Webdav ${ctx.context.user.username} move ${realPathFrom} -> ${realPathTo}`)
 
         const rename = (overwritten: boolean) => {
             fs.rename(realPathFrom, realPathTo, (e) => {
@@ -370,6 +376,7 @@ export class PerUserFileSystem extends FileSystem {
     protected _readDir(path : Path, ctx : ReadDirInfo, callback : ReturnCallback<string[] | Path[]>) : void
     {
         const { realPath } = this.getRealPath(path, ctx.context);
+        debug(`Webdav ${ctx.context.user.username} list ${realPath}`)
 
         fs.readdir(realPath, (e, files) => {
             callback(e ? Errors.ResourceNotFound : undefined, files);
