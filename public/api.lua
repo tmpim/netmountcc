@@ -318,13 +318,6 @@ end
 
 -- [[ Main API ]] --
 
---- @class NetmountState
---- @field server table
---- @field attributes {contents: table<string, table>, capacity: number[]}
---- @field credentials {url: string, username:string, auth: table<string, string>}
---- @field close function
-
-
 ---@class NetMountAPI
 local nm = {}
 
@@ -538,8 +531,10 @@ nm.createFs = function(state, mount, streamHandlers)
     api.getDrive = function(path)
         expect(1, path, "string")
         path = fs.combine(path)
-        if api.isDir(path) then
+        if api.exists(path) then
             return "netmount"
+        else
+            return nil
         end
     end
 
@@ -760,7 +755,7 @@ nm.createFs = function(state, mount, streamHandlers)
 
             handle.readAll = function()
                 assert(not internal.closed, "attempt to use a closed file")
-                local pos = internal.pos
+                local pos = internal.pos + 1
                 local out = internal.buffer:sub(pos, -1)
                 if internal.pos < #internal.buffer then
                     internal.pos = internal.pos + #out
